@@ -123,6 +123,10 @@ class MultiStartPipeline(stagegate.Pipeline):
                     continue
                 if outcome.ok:
                     accepted.append(outcome)
+                    if len(accepted) >= 5:
+                        for other in pending:
+                            other.cancel()
+                        break
 
         if len(accepted) < 5:
             raise RuntimeError("not enough acceptable results")
@@ -135,6 +139,8 @@ class MultiStartPipeline(stagegate.Pipeline):
         ).run()
         return summary_handle.result()
 ```
+
+Cancellation is best-effort: queued tasks may be cancelled, but already running tasks continue.
 
 Why it fits:
 
@@ -169,6 +175,10 @@ class BatchExperimentPipeline(stagegate.Pipeline):
                 report = handle.result()
                 if report.score >= 0.9:
                     accepted_models.append(report.model_path)
+                    if len(accepted_models) >= 3:
+                        for other in pending:
+                            other.cancel()
+                        break
 
         if len(accepted_models) < 3:
             raise RuntimeError("not enough good models")
@@ -181,6 +191,8 @@ class BatchExperimentPipeline(stagegate.Pipeline):
         ).run()
         return package_handle.result()
 ```
+
+Cancellation is best-effort: queued tasks may be cancelled, but already running tasks continue.
 
 Why it fits:
 
