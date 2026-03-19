@@ -135,7 +135,7 @@ Top-level exports:
 - `stagegate.UnknownResourceError`
 - `stagegate.UnschedulableTaskError`
 
-See: [API.md](./API.md)
+See: [API.md](https://github.com/ttkkmg/stagegate/blob/main/API.md)
 
 ## Use Cases
 
@@ -147,7 +147,7 @@ Pseudo-code walkthroughs based on the project use-case spec:
 - system administration and log collection
 - top-level coordination with pipeline handles
 
-Use-case guide: [USE_CASES.md](./USE_CASES.md)
+Use-case guide: [USE_CASES.md](https://github.com/ttkkmg/stagegate/blob/main/USE_CASES.md)
 
 ## Scheduling Model
 
