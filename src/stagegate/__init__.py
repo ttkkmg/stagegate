@@ -4,6 +4,13 @@ from .exceptions import CancelledError, UnknownResourceError, UnschedulableTaskE
 from .handles import PipelineHandle, TaskHandle
 from .pipeline import Pipeline
 from .scheduler import Scheduler
+from .snapshots import (
+    PipelineCountsSnapshot,
+    PipelineSnapshot,
+    ResourceSnapshot,
+    SchedulerSnapshot,
+    TaskCountsSnapshot,
+)
 from .wait import ALL_COMPLETED, FIRST_COMPLETED, FIRST_EXCEPTION
 
 __all__ = [
@@ -17,4 +24,9 @@ __all__ = [
     "CancelledError",
     "UnknownResourceError",
     "UnschedulableTaskError",
+    "ResourceSnapshot",
+    "TaskCountsSnapshot",
+    "PipelineCountsSnapshot",
+    "SchedulerSnapshot",
+    "PipelineSnapshot",
 ]

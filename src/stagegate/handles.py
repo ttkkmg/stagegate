@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from ._records import TerminalPipelineState, TerminalTaskState
 from ._states import PipelineState, TaskState
 from .exceptions import CancelledError
+from .snapshots import PipelineSnapshot, TaskCountsSnapshot, pipeline_state_to_public_name
 
 if TYPE_CHECKING:
     from ._records import PipelineRecord, TaskRecord
@@ -216,4 +217,24 @@ class PipelineHandle:
                 return self._record.exception
             raise CancelledError(
                 "exception() was requested from a cancelled pipeline handle"
+            )
+
+    def snapshot(self) -> PipelineSnapshot:
+        """Return an immutable point-in-time snapshot for this pipeline."""
+        scheduler = self._record.scheduler
+        with scheduler._condition:
+            tasks = TaskCountsSnapshot(
+                queued=self._record.queued_task_count,
+                admitted=self._record.admitted_task_count,
+                running=self._record.running_task_count,
+                succeeded=self._record.succeeded_task_count,
+                failed=self._record.failed_task_count,
+                cancelled=self._record.cancelled_task_count,
+                total=self._record.total_task_count,
+            )
+            return PipelineSnapshot(
+                pipeline_id=self._record.pipeline_id,
+                state=pipeline_state_to_public_name(self._record.state),
+                stage_index=self._record.stage_index,
+                tasks=tasks,
             )

@@ -14,3 +14,8 @@ def test_top_level_namespace_exports_expected_symbols() -> None:
     assert issubclass(stagegate.CancelledError, Exception)
     assert issubclass(stagegate.UnknownResourceError, ValueError)
     assert issubclass(stagegate.UnschedulableTaskError, ValueError)
+    assert stagegate.ResourceSnapshot is not None
+    assert stagegate.TaskCountsSnapshot is not None
+    assert stagegate.PipelineCountsSnapshot is not None
+    assert stagegate.SchedulerSnapshot is not None
+    assert stagegate.PipelineSnapshot is not None

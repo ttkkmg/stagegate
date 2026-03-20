@@ -19,6 +19,12 @@ from ._states import PipelineState, SchedulerState, TaskState
 from .exceptions import UnknownResourceError, UnschedulableTaskError
 from .handles import PipelineHandle
 from .pipeline import Pipeline
+from .snapshots import (
+    PipelineCountsSnapshot,
+    ResourceSnapshot,
+    SchedulerSnapshot,
+    TaskCountsSnapshot,
+)
 from ._wait_utils import (
     monotonic_deadline,
     remaining_timeout,
@@ -79,6 +85,77 @@ class Scheduler:
         """Return whether the scheduler has fully closed."""
         with self._condition:
             return self._runtime.state is SchedulerState.CLOSED
+
+    def snapshot(self) -> SchedulerSnapshot:
+        """Return an immutable point-in-time snapshot of scheduler state."""
+        with self._condition:
+            queued_pipelines = sum(
+                1
+                for record in self._runtime.pipeline_records.values()
+                if record.state is PipelineState.QUEUED
+            )
+            running_pipelines = sum(
+                1
+                for record in self._runtime.pipeline_records.values()
+                if record.state is PipelineState.RUNNING
+            )
+            pipeline_counts = PipelineCountsSnapshot(
+                queued=queued_pipelines,
+                running=running_pipelines,
+                succeeded=self._runtime.succeeded_pipeline_count,
+                failed=self._runtime.failed_pipeline_count,
+                cancelled=self._runtime.cancelled_pipeline_count,
+                total=(
+                    queued_pipelines
+                    + running_pipelines
+                    + self._runtime.succeeded_pipeline_count
+                    + self._runtime.failed_pipeline_count
+                    + self._runtime.cancelled_pipeline_count
+                ),
+            )
+            queued_tasks = sum(
+                1
+                for record in self._runtime.task_records.values()
+                if record.state is TaskState.QUEUED
+            )
+            running_tasks = sum(
+                1
+                for record in self._runtime.task_records.values()
+                if record.state is TaskState.RUNNING
+            )
+            task_counts = TaskCountsSnapshot(
+                queued=queued_tasks,
+                admitted=self._runtime.admitted_task_count,
+                running=running_tasks,
+                succeeded=self._runtime.succeeded_task_count,
+                failed=self._runtime.failed_task_count,
+                cancelled=self._runtime.cancelled_task_count,
+                total=(
+                    queued_tasks
+                    + self._runtime.admitted_task_count
+                    + self._runtime.succeeded_task_count
+                    + self._runtime.failed_task_count
+                    + self._runtime.cancelled_task_count
+                ),
+            )
+            resources = tuple(
+                ResourceSnapshot(
+                    label=label,
+                    capacity=self._resources[label],
+                    in_use=self._runtime.resources_in_use[label],
+                    available=self._resources[label] - self._runtime.resources_in_use[label],
+                )
+                for label in sorted(self._resources)
+            )
+            return SchedulerSnapshot(
+                shutdown_started=self._runtime.state is not SchedulerState.OPEN,
+                closed=self._runtime.state is SchedulerState.CLOSED,
+                pipeline_parallelism=self._pipeline_parallelism,
+                task_parallelism=self._effective_task_parallelism,
+                pipelines=pipeline_counts,
+                tasks=task_counts,
+                resources=resources,
+            )
 
     def run_pipeline(self, pipeline: Pipeline) -> PipelineHandle:
         """Submit a pipeline instance for FIFO execution and return its handle."""
@@ -410,7 +487,7 @@ class Scheduler:
         record: TaskRecord,
         *,
         state: TaskState,
-        result_value= None,
+        result_value=None,
         exception: BaseException | None = None,
         release_resources: bool = False,
     ) -> None:
@@ -432,13 +509,16 @@ class Scheduler:
             record.result_value = result_value
             record.exception = None
             pipeline_record.succeeded_task_count += 1
+            self._runtime.succeeded_task_count += 1
         elif state is TaskState.FAILED:
             record.result_value = None
             record.exception = exception
             pipeline_record.failed_task_count += 1
+            self._runtime.failed_task_count += 1
         else:
             record.result_value = None
             pipeline_record.cancelled_task_count += 1
+            self._runtime.cancelled_task_count += 1
 
         if release_resources:
             self._release_resources_locked(record.resources_required)
@@ -473,9 +553,13 @@ class Scheduler:
         if state is PipelineState.SUCCEEDED:
             record.result_value = result_value
             record.exception = None
+            self._runtime.succeeded_pipeline_count += 1
         elif state is PipelineState.FAILED:
             record.result_value = None
             record.exception = exception
+            self._runtime.failed_pipeline_count += 1
+        else:
+            self._runtime.cancelled_pipeline_count += 1
 
         self._runtime.pipeline_records.pop(record.pipeline_id, None)
 

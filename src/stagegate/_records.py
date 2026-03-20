@@ -149,6 +149,12 @@ class SchedulerRuntime:
     next_global_task_submit_seq: int = 0
     next_ready_seq: int = 0
     admitted_task_count: int = 0
+    succeeded_pipeline_count: int = 0
+    failed_pipeline_count: int = 0
+    cancelled_pipeline_count: int = 0
+    succeeded_task_count: int = 0
+    failed_task_count: int = 0
+    cancelled_task_count: int = 0
     pipeline_queue: deque[PipelineQueueEntry] = field(default_factory=deque)
     task_queue: list[TaskQueueEntry] = field(default_factory=list)
     ready_queue: deque[ReadyQueueEntry] = field(default_factory=deque)
