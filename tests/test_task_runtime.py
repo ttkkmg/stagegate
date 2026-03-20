@@ -4,10 +4,20 @@ import heapq
 import threading
 import time
 
+import pytest
+
 import stagegate
 from stagegate._records import PipelineRecord
 from stagegate._records import ReadyQueueEntry, TaskQueueEntry, TaskRecord
 from stagegate._states import PipelineState, TaskState
+
+
+def add_task_to_live_registry(pipeline_record: object, record: TaskRecord) -> None:
+    registry = pipeline_record.task_records
+    if hasattr(registry, "add"):
+        registry.add(record)
+    else:
+        registry.append(record)
 
 
 def bind_running_pipeline(
@@ -58,7 +68,7 @@ def make_queued_task_record(
         global_task_submit_seq=global_task_submit_seq,
         state=TaskState.QUEUED,
     )
-    pipeline_record.task_records.append(record)
+    add_task_to_live_registry(pipeline_record, record)
     scheduler._runtime.task_records[task_id] = record
     heapq.heappush(scheduler._runtime.task_queue, TaskQueueEntry.from_record(record))
     return record
@@ -67,6 +77,32 @@ def make_queued_task_record(
 def test_task_parallelism_none_defaults_to_one_worker() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2})
     assert scheduler._effective_task_parallelism == 1
+
+
+def test_task_record_live_registry_uses_identity_membership() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2})
+    _, pipeline_record = bind_running_pipeline(scheduler)
+
+    first = TaskRecord(
+        scheduler=scheduler,
+        pipeline_record=pipeline_record,
+        task_id=1,
+        fn=lambda: None,
+        resources_required={"cpu": 1},
+    )
+    second = TaskRecord(
+        scheduler=scheduler,
+        pipeline_record=pipeline_record,
+        task_id=1,
+        fn=lambda: None,
+        resources_required={"cpu": 1},
+    )
+
+    registry = {first}
+    first.state = TaskState.RUNNING
+
+    assert first in registry
+    assert second not in registry
 
 
 def test_resource_ledger_reserve_and_release_helpers() -> None:
@@ -307,7 +343,7 @@ def test_ready_cancel_releases_resources_and_worker_skips_stale_entry() -> None:
             ready_seq=1,
         )
         scheduler._runtime.task_records[record.task_id] = record
-        pipeline_record.task_records.append(record)
+        add_task_to_live_registry(pipeline_record, record)
         scheduler._runtime.ready_queue.append(ReadyQueueEntry(1, record))
         scheduler._runtime.admitted_task_count = 1
         scheduler._reserve_resources_locked({"cpu": 1})
@@ -318,6 +354,8 @@ def test_ready_cancel_releases_resources_and_worker_skips_stale_entry() -> None:
         assert scheduler._runtime.resources_in_use["cpu"] == 0
         assert scheduler._runtime.admitted_task_count == 0
         assert record.ready_seq is None
+        assert record.task_id not in scheduler._runtime.task_records
+        assert record not in pipeline_record.task_records
         assert scheduler._pop_next_ready_task_locked() is None
 
 
@@ -336,7 +374,7 @@ def test_cancel_vs_start_is_linearized_for_ready_task() -> None:
             ready_seq=1,
         )
         scheduler._runtime.task_records[record.task_id] = record
-        pipeline_record.task_records.append(record)
+        add_task_to_live_registry(pipeline_record, record)
         scheduler._runtime.ready_queue.append(ReadyQueueEntry(1, record))
         scheduler._runtime.admitted_task_count = 1
         scheduler._reserve_resources_locked({"cpu": 1})
@@ -375,3 +413,62 @@ def test_cancel_vs_start_is_linearized_for_ready_task() -> None:
             assert scheduler._runtime.resources_in_use["cpu"] == 1
             assert scheduler._runtime.admitted_task_count == 1
             assert worker_started == [True]
+
+
+def test_task_success_cleanup_removes_task_from_live_registries() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    pipeline, pipeline_record = bind_running_pipeline(scheduler)
+
+    handle = pipeline.task(lambda: "done", resources={"cpu": 1}).run()
+
+    assert handle.result(timeout=1.0) == "done"
+    with scheduler._condition:
+        assert handle._record.state is TaskState.SUCCEEDED
+        assert handle._record.task_id not in scheduler._runtime.task_records
+        assert handle._record not in pipeline_record.task_records
+
+
+def test_task_success_cleanup_scrubs_heavy_execution_inputs() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    pipeline, _ = bind_running_pipeline(scheduler, stage_index=3)
+
+    def run_task(sample_id: str, *, flag: bool) -> str:
+        assert flag is True
+        return sample_id
+
+    handle = pipeline.task(
+        run_task,
+        resources={"cpu": 1},
+        args=("S1",),
+        kwargs={"flag": True},
+        name="sample-task",
+    ).run()
+
+    assert handle.result(timeout=1.0) == "S1"
+    record = handle._record
+    with scheduler._condition:
+        assert record.args == ()
+        assert record.kwargs == {}
+        assert record.resources_required == {}
+        assert record.name is None
+        assert record.stage_snapshot == 0
+        assert record.pipeline_enqueue_seq == 0
+        assert record.pipeline_local_task_seq == 0
+        assert record.global_task_submit_seq == 0
+
+
+def test_task_failure_cleanup_removes_task_from_live_registries() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    pipeline, pipeline_record = bind_running_pipeline(scheduler)
+
+    handle = pipeline.task(
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        resources={"cpu": 1},
+    ).run()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        handle.result(timeout=1.0)
+    with scheduler._condition:
+        assert handle._record.state is TaskState.FAILED
+        assert handle._record.task_id not in scheduler._runtime.task_records
+        assert handle._record not in pipeline_record.task_records

@@ -213,9 +213,12 @@ class Scheduler:
 
     def _cancel_pending_pipelines_locked(self) -> None:
         changed = False
-        for record in self._runtime.pipeline_records.values():
+        for record in list(self._runtime.pipeline_records.values()):
             if record.state is PipelineState.QUEUED:
-                record.state = PipelineState.CANCELLED
+                self._finalize_pipeline_terminal_locked(
+                    record,
+                    state=PipelineState.CANCELLED,
+                )
                 changed = True
         if changed:
             self._condition.notify_all()
@@ -250,14 +253,15 @@ class Scheduler:
 
     def _cancel_task_if_possible_locked(self, record: TaskRecord) -> bool:
         if record.state is TaskState.QUEUED:
-            record.state = TaskState.CANCELLED
+            self._finalize_task_terminal_locked(record, state=TaskState.CANCELLED)
             self._notify_state_change_locked()
             return True
         if record.state is TaskState.READY:
-            record.state = TaskState.CANCELLED
-            record.ready_seq = None
-            self._release_resources_locked(record.resources_required)
-            self._runtime.admitted_task_count -= 1
+            self._finalize_task_terminal_locked(
+                record,
+                state=TaskState.CANCELLED,
+                release_resources=True,
+            )
             self._notify_state_change_locked()
             return True
         return False
@@ -288,7 +292,9 @@ class Scheduler:
             state=TaskState.QUEUED,
         )
         self._runtime.task_records[record.task_id] = record
-        pipeline_record.task_records.append(record)
+        pipeline_record.task_records.add(record)
+        pipeline_record.queued_task_count += 1
+        pipeline_record.total_task_count += 1
         heapq.heappush(self._runtime.task_queue, TaskQueueEntry.from_record(record))
         self._condition.notify_all()
         from .handles import TaskHandle
@@ -391,11 +397,87 @@ class Scheduler:
         self._reserve_resources_locked(record.resources_required)
         self._runtime.admitted_task_count += 1
         self._runtime.next_ready_seq += 1
+        record.pipeline_record.queued_task_count -= 1
+        record.pipeline_record.admitted_task_count += 1
         record.state = TaskState.READY
         record.ready_seq = self._runtime.next_ready_seq
         self._runtime.ready_queue.append(ReadyQueueEntry(record.ready_seq, record))
         self._condition.notify_all()
         return True
+
+    def _finalize_task_terminal_locked(
+        self,
+        record: TaskRecord,
+        *,
+        state: TaskState,
+        result_value= None,
+        exception: BaseException | None = None,
+        release_resources: bool = False,
+    ) -> None:
+        previous_state = record.state
+        pipeline_record = record.pipeline_record
+
+        if previous_state is TaskState.QUEUED:
+            pipeline_record.queued_task_count -= 1
+        elif previous_state is TaskState.READY:
+            pipeline_record.admitted_task_count -= 1
+        elif previous_state is TaskState.RUNNING:
+            pipeline_record.admitted_task_count -= 1
+            pipeline_record.running_task_count -= 1
+
+        record.state = state
+        record.ready_seq = None
+        record.worker_thread_ident = None
+        if state is TaskState.SUCCEEDED:
+            record.result_value = result_value
+            record.exception = None
+            pipeline_record.succeeded_task_count += 1
+        elif state is TaskState.FAILED:
+            record.result_value = None
+            record.exception = exception
+            pipeline_record.failed_task_count += 1
+        else:
+            record.result_value = None
+            pipeline_record.cancelled_task_count += 1
+
+        if release_resources:
+            self._release_resources_locked(record.resources_required)
+            self._runtime.admitted_task_count -= 1
+        elif previous_state is TaskState.RUNNING:
+            self._release_resources_locked(record.resources_required)
+            self._runtime.admitted_task_count -= 1
+
+        self._runtime.task_records.pop(record.task_id, None)
+        pipeline_record.task_records.discard(record)
+
+        record.fn = lambda: None
+        record.resources_required = {}
+        record.args = ()
+        record.kwargs = {}
+        record.name = None
+        record.stage_snapshot = 0
+        record.pipeline_enqueue_seq = 0
+        record.pipeline_local_task_seq = 0
+        record.global_task_submit_seq = 0
+
+    def _finalize_pipeline_terminal_locked(
+        self,
+        record: PipelineRecord,
+        *,
+        state: PipelineState,
+        result_value=None,
+        exception: BaseException | None = None,
+    ) -> None:
+        record.state = state
+        record.coordinator_thread_ident = None
+        if state is PipelineState.SUCCEEDED:
+            record.result_value = result_value
+            record.exception = None
+        elif state is PipelineState.FAILED:
+            record.result_value = None
+            record.exception = exception
+
+        self._runtime.pipeline_records.pop(record.pipeline_id, None)
 
     def _dispatcher_loop(self) -> None:
         with self._condition:
@@ -420,6 +502,7 @@ class Scheduler:
                 if record is None:
                     self._condition.wait()
                     continue
+                record.pipeline_record.running_task_count += 1
                 record.state = TaskState.RUNNING
                 record.ready_seq = None
                 record.worker_thread_ident = worker_ident
@@ -435,15 +518,18 @@ class Scheduler:
                 error = exc
 
             with self._condition:
-                record.worker_thread_ident = None
                 if error is None:
-                    record.state = TaskState.SUCCEEDED
-                    record.result_value = result_value
+                    self._finalize_task_terminal_locked(
+                        record,
+                        state=TaskState.SUCCEEDED,
+                        result_value=result_value,
+                    )
                 else:
-                    record.state = TaskState.FAILED
-                    record.exception = error
-                self._release_resources_locked(record.resources_required)
-                self._runtime.admitted_task_count -= 1
+                    self._finalize_task_terminal_locked(
+                        record,
+                        state=TaskState.FAILED,
+                        exception=error,
+                    )
                 self._notify_state_change_locked()
 
     def _coordinator_loop(self) -> None:
@@ -472,11 +558,16 @@ class Scheduler:
                 error = exc
 
             with self._condition:
-                record.coordinator_thread_ident = None
                 if error is None:
-                    record.state = PipelineState.SUCCEEDED
-                    record.result_value = result_value
+                    self._finalize_pipeline_terminal_locked(
+                        record,
+                        state=PipelineState.SUCCEEDED,
+                        result_value=result_value,
+                    )
                 else:
-                    record.state = PipelineState.FAILED
-                    record.exception = error
+                    self._finalize_pipeline_terminal_locked(
+                        record,
+                        state=PipelineState.FAILED,
+                        exception=error,
+                    )
                 self._notify_state_change_locked()

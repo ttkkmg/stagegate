@@ -54,6 +54,22 @@ class FailingPipeline(stagegate.Pipeline):
         raise ValueError("boom")
 
 
+class DetachedTaskPipeline(stagegate.Pipeline):
+    def __init__(self) -> None:
+        self.task_started = threading.Event()
+        self.task_release = threading.Event()
+        self.task_handle: stagegate.TaskHandle | None = None
+
+    def run(self) -> str:
+        def child() -> str:
+            self.task_started.set()
+            self.task_release.wait(timeout=1.0)
+            return "child-done"
+
+        self.task_handle = self.task(child, resources={"cpu": 1}).run()
+        return "pipeline-done"
+
+
 def test_pipeline_run_executes_on_coordinator_thread_and_returns_result() -> None:
     scheduler = stagegate.Scheduler(
         resources={"cpu": 2},
@@ -70,6 +86,8 @@ def test_pipeline_run_executes_on_coordinator_thread_and_returns_result() -> Non
     assert handle._record.state is PipelineState.SUCCEEDED
     assert handle._record.coordinator_thread_ident is None
     assert handle._record.stage_index == 1
+    with scheduler._condition:
+        assert handle._record.pipeline_id not in scheduler._runtime.pipeline_records
 
 
 def test_stage_forward_changes_stage_snapshot_for_later_tasks() -> None:
@@ -139,6 +157,30 @@ def test_pipeline_failure_sets_failed_state_and_preserves_exception() -> None:
     assert isinstance(error, ValueError)
     assert str(error) == "boom"
     assert handle._record.state is PipelineState.FAILED
+    with scheduler._condition:
+        assert handle._record.pipeline_id not in scheduler._runtime.pipeline_records
+
+
+def test_terminal_pipeline_may_still_have_live_child_tasks() -> None:
+    scheduler = stagegate.Scheduler(
+        resources={"cpu": 2},
+        pipeline_parallelism=1,
+        task_parallelism=1,
+    )
+    pipeline = DetachedTaskPipeline()
+
+    handle = scheduler.run_pipeline(pipeline)
+
+    assert handle.result(timeout=1.0) == "pipeline-done"
+    assert pipeline.task_handle is not None
+    with scheduler._condition:
+        assert handle._record.state is PipelineState.SUCCEEDED
+        assert pipeline.task_handle.done() is False
+        assert handle._record.task_records
+        assert handle._record.pipeline_id not in scheduler._runtime.pipeline_records
+
+    pipeline.task_release.set()
+    assert pipeline.task_handle.result(timeout=1.0) == "child-done"
 
 
 def test_stage_forward_rejects_outside_active_control_context() -> None:

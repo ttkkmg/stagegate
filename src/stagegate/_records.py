@@ -71,7 +71,7 @@ class ReadyQueueEntry:
     record: TaskRecord = field(compare=False)
 
 
-@dataclass(slots=True)
+@dataclass(eq=False, slots=True)
 class PipelineRecord:
     """Mutable source-of-truth record for one pipeline instance."""
 
@@ -85,7 +85,14 @@ class PipelineRecord:
     result_value: Any = None
     exception: BaseException | None = None
     coordinator_thread_ident: int | None = None
-    task_records: list[TaskRecord] = field(default_factory=list)
+    queued_task_count: int = 0
+    admitted_task_count: int = 0
+    running_task_count: int = 0
+    succeeded_task_count: int = 0
+    failed_task_count: int = 0
+    cancelled_task_count: int = 0
+    total_task_count: int = 0
+    task_records: set[TaskRecord] = field(default_factory=set)
 
     def is_terminal(self) -> bool:
         """Return whether the pipeline is in a terminal state."""
@@ -93,7 +100,7 @@ class PipelineRecord:
         return self.state in TerminalPipelineState
 
 
-@dataclass(slots=True)
+@dataclass(eq=False, slots=True)
 class TaskRecord:
     """Mutable source-of-truth record for one scheduled task."""
 

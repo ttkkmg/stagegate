@@ -150,7 +150,10 @@ class PipelineHandle:
         scheduler = self._record.scheduler
         with scheduler._condition:
             if self._record.state is PipelineState.QUEUED:
-                self._record.state = PipelineState.CANCELLED
+                scheduler._finalize_pipeline_terminal_locked(
+                    self._record,
+                    state=PipelineState.CANCELLED,
+                )
                 scheduler._notify_state_change_locked()
                 return True
             return False

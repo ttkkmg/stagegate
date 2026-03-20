@@ -10,6 +10,14 @@ from stagegate._records import PipelineRecord, TaskRecord
 from stagegate._states import PipelineState, TaskState
 
 
+def add_task_to_live_registry(pipeline_record: object, record: TaskRecord) -> None:
+    registry = pipeline_record.task_records
+    if hasattr(registry, "add"):
+        registry.add(record)
+    else:
+        registry.append(record)
+
+
 class BlockingPipeline(stagegate.Pipeline):
     def __init__(self) -> None:
         self.started = threading.Event()
@@ -80,7 +88,7 @@ def make_task_handle(
         resources_required={"cpu": 1},
         state=state,
     )
-    pipeline_record.task_records.append(record)
+    add_task_to_live_registry(pipeline_record, record)
     scheduler._runtime.task_records[record.task_id] = record
     return stagegate.TaskHandle(record)
 

@@ -10,6 +10,14 @@ from stagegate._records import PipelineRecord
 from stagegate._states import PipelineState, TaskState
 
 
+def add_task_to_live_registry(pipeline_record: object, record: object) -> None:
+    registry = pipeline_record.task_records
+    if hasattr(registry, "add"):
+        registry.add(record)
+    else:
+        registry.append(record)
+
+
 def bind_running_pipeline(
     scheduler: stagegate.Scheduler,
     *,
@@ -128,7 +136,8 @@ def test_task_builder_run_returns_task_handle_and_registers_task() -> None:
     assert record.pipeline_local_task_seq == 1
     assert record.global_task_submit_seq == 1
     assert scheduler._runtime.task_records[record.task_id] is record
-    assert pipeline_record.task_records == [record]
+    assert record in pipeline_record.task_records
+    assert len(pipeline_record.task_records) == 1
     assert len(scheduler._runtime.task_queue) == 1
     assert scheduler._runtime.task_queue[0].record is record
 
@@ -150,6 +159,8 @@ def test_task_builder_run_assigns_monotonic_local_and_global_sequences() -> None
 def test_task_builder_run_uses_stage_snapshot_at_submit_time() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 4})
     pipeline, pipeline_record = bind_running_pipeline(scheduler, stage_index=1)
+    with scheduler._condition:
+        scheduler._reserve_resources_locked({"cpu": 4})
 
     first = pipeline.task(lambda: None, resources={"cpu": 1}).run()
     with scheduler._condition:
@@ -158,6 +169,13 @@ def test_task_builder_run_uses_stage_snapshot_at_submit_time() -> None:
 
     assert first._record.stage_snapshot == 1
     assert second._record.stage_snapshot == 4
+    with scheduler._condition:
+        scheduler._release_resources_locked({"cpu": 4})
+        scheduler._notify_state_change_locked()
+        pipeline_record.state = PipelineState.SUCCEEDED
+        pipeline_record.coordinator_thread_ident = None
+        scheduler._notify_state_change_locked()
+    scheduler.close()
 
 
 def test_task_builder_run_enqueues_priority_key_from_record() -> None:
