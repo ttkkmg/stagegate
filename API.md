@@ -16,8 +16,14 @@ Public names:
 - `FIRST_EXCEPTION`
 - `ALL_COMPLETED`
 - `CancelledError`
+- `DiscardedHandleError`
 - `UnknownResourceError`
 - `UnschedulableTaskError`
+- `ResourceSnapshot`
+- `TaskCountsSnapshot`
+- `PipelineCountsSnapshot`
+- `SchedulerSnapshot`
+- `PipelineSnapshot`
 
 ## `Scheduler`
 
@@ -227,6 +233,31 @@ Return values:
   `True` once shutdown has begun.
 - `closed()`
   `True` once no live work remains and the scheduler-owned runtime threads have terminated.
+
+### `Scheduler.snapshot()`
+
+```python
+snapshot() -> SchedulerSnapshot
+```
+
+Return an immutable point-in-time aggregate snapshot.
+
+The snapshot includes:
+
+- `shutdown_started`
+- `closed`
+- `pipeline_parallelism`
+- effective `task_parallelism`
+- aggregate pipeline counts
+- aggregate task counts
+- deterministic per-resource usage data
+
+Important details:
+
+- may be called before submission, during execution, after `shutdown()`, and after `close()`
+- does not wait for work to finish
+- does not expose internal records or queue entries
+- terminal totals remain visible even though scheduler-global terminal bookkeeping is cleaned up eagerly
 
 ## `Pipeline`
 
@@ -617,6 +648,53 @@ Raises:
 - `ValueError`
   If `timeout < 0`.
 
+### `PipelineHandle.snapshot()`
+
+```python
+snapshot() -> PipelineSnapshot
+```
+
+Return an immutable point-in-time snapshot for that pipeline.
+
+The snapshot includes:
+
+- `pipeline_id`
+- public string `state`
+- current `stage_index`
+- aggregate task counts for that pipeline
+
+Important details:
+
+- may be called while the pipeline is queued, running, or terminal
+- may show a terminal pipeline state while child tasks still remain queued, admitted, or running
+- raises `DiscardedHandleError` after `discard()`
+
+### `PipelineHandle.discard()`
+
+```python
+discard() -> None
+```
+
+Explicitly abandon a terminal pipeline handle so retained terminal outcome data
+may be released.
+
+Behavior:
+
+- allowed only after the pipeline is terminal
+- prior `result()` or `exception()` observation is not required
+- idempotent
+- may be called even if detached child tasks from that pipeline are still live
+- does not invalidate separately held `TaskHandle` objects
+
+After `discard()`, the following raise `DiscardedHandleError`:
+
+- `done()`
+- `running()`
+- `cancelled()`
+- `result()`
+- `exception()`
+- `snapshot()`
+
 ## Wait Constants
 
 ```python
@@ -659,6 +737,10 @@ Return once every handle is terminal.
 
 Raised by `result()` and `exception()` on cancelled task or pipeline handles.
 
+### `DiscardedHandleError`
+
+Raised by pipeline-handle observation methods after `PipelineHandle.discard()`.
+
 ### `UnknownResourceError`
 
 Raised when task submission requests a resource label unknown to the scheduler.
@@ -682,4 +764,5 @@ class Demo(stagegate.Pipeline):
 with stagegate.Scheduler(resources={"cpu": 2}) as scheduler:
     pipeline_handle = scheduler.run_pipeline(Demo())
     print(pipeline_handle.result())
+    pipeline_handle.discard()
 ```

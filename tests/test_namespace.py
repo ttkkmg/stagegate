@@ -12,6 +12,7 @@ def test_top_level_namespace_exports_expected_symbols() -> None:
     assert stagegate.FIRST_EXCEPTION == "FIRST_EXCEPTION"
     assert stagegate.ALL_COMPLETED == "ALL_COMPLETED"
     assert issubclass(stagegate.CancelledError, Exception)
+    assert issubclass(stagegate.DiscardedHandleError, RuntimeError)
     assert issubclass(stagegate.UnknownResourceError, ValueError)
     assert issubclass(stagegate.UnschedulableTaskError, ValueError)
     assert stagegate.ResourceSnapshot is not None

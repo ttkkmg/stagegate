@@ -54,21 +54,28 @@ class DemoPipeline(stagegate.Pipeline):
         self.pipeline_index = pipeline_index
 
     @staticmethod
-    def stage1_work(value: int) -> int:
+    def stage1_work(pipeline_index: int, value: int) -> int:
         time.sleep(random.uniform(0.05, 0.3))
+        value = pipeline_index * 10 + value
+        print(f"pipeline {pipeline_index}, stage1: {value}")
         return value
 
     @staticmethod
-    def stage2_sum(values: list[int]) -> int:
+    def stage2_sum(pipeline_index: int, values: list[int]) -> int:
         time.sleep(random.uniform(0.1, 0.4))
-        return sum(values)
+        total = sum(values)
+        print(f"pipeline {pipeline_index}, stage2: {total}")
+        return total
 
     def run(self) -> int:
         stage1_handles = [
             self.task(
                 self.stage1_work,
                 resources={"cpu": 1},
-                args=(self.pipeline_index * 10 + n,),
+                args=(
+                    self.pipeline_index,
+                    n,
+                ),
             ).run()
             for n in range(10)
         ]
@@ -85,7 +92,10 @@ class DemoPipeline(stagegate.Pipeline):
         stage2_handle = self.task(
             self.stage2_sum,
             resources={"cpu": 4},
-            args=(stage1_values,),
+            args=(
+                self.pipeline_index,
+                stage1_values,
+            ),
         ).run()
         return stage2_handle.result()
 
@@ -118,6 +128,7 @@ with stagegate.Scheduler(
                 f"sum({stage1_base} .. {stage1_base + 9}) = {pipeline_sum}"
             )
             assert pipeline_sum == stage1_total
+            handle.discard()
 ```
 
 ## Public API
@@ -132,8 +143,14 @@ Top-level exports:
 - `stagegate.FIRST_EXCEPTION`
 - `stagegate.ALL_COMPLETED`
 - `stagegate.CancelledError`
+- `stagegate.DiscardedHandleError`
 - `stagegate.UnknownResourceError`
 - `stagegate.UnschedulableTaskError`
+- `stagegate.ResourceSnapshot`
+- `stagegate.TaskCountsSnapshot`
+- `stagegate.PipelineCountsSnapshot`
+- `stagegate.SchedulerSnapshot`
+- `stagegate.PipelineSnapshot`
 
 See: [API.md](https://github.com/ttkkmg/stagegate/blob/main/API.md)
 
@@ -146,6 +163,7 @@ Pseudo-code walkthroughs based on the project use-case spec:
 - machine-learning batch experiments
 - system administration and log collection
 - top-level coordination with pipeline handles
+- long-lived batch loops with `PipelineHandle.discard()`
 
 Use-case guide: [USE_CASES.md](https://github.com/ttkkmg/stagegate/blob/main/USE_CASES.md)
 
@@ -175,6 +193,24 @@ If the highest-priority queued task cannot run because resources are unavailable
 - `Scheduler.wait_pipelines(...)` for pipeline handles at the application boundary
 
 Both support `ALL_COMPLETED`, `FIRST_COMPLETED`, and `FIRST_EXCEPTION`.
+
+## Snapshots and Discard
+
+For observation without exposing mutable internals:
+
+- `scheduler.snapshot()`
+- `pipeline_handle.snapshot()`
+
+These return immutable aggregate dataclasses.
+
+For long-lived scripts that keep many pipeline handles in scope:
+
+- call `pipeline_handle.discard()` after you no longer need that handle's
+  `result()`, `exception()`, or `snapshot()`
+- discard invalidates that pipeline handle but does not invalidate any
+  separately held `TaskHandle`
+- discard is useful when a pipeline may be terminal even though detached child
+  tasks still continue draining in the background
 
 ## Shutdown and Close
 

@@ -215,6 +215,66 @@ def test_pipeline_handle_result_and_exception_for_cancelled() -> None:
         handle.exception()
 
 
+@pytest.mark.parametrize("state", [PipelineState.QUEUED, PipelineState.RUNNING])
+def test_pipeline_handle_discard_requires_terminal_pipeline(
+    state: PipelineState,
+) -> None:
+    handle = stagegate.PipelineHandle(make_pipeline_record(state=state))
+
+    with pytest.raises(RuntimeError):
+        handle.discard()
+
+
+def test_pipeline_handle_discard_invalidates_observation_methods_and_clears_result() -> None:
+    record = make_pipeline_record(state=PipelineState.SUCCEEDED)
+    record.result_value = {"payload": "ok"}
+    handle = stagegate.PipelineHandle(record)
+
+    handle.discard()
+
+    assert record.pipeline is None
+    assert record.result_value is None
+    assert record.exception is None
+    for method_name in (
+        "done",
+        "running",
+        "cancelled",
+        "result",
+        "exception",
+        "snapshot",
+    ):
+        with pytest.raises(stagegate.DiscardedHandleError):
+            getattr(handle, method_name)()
+
+
+def test_pipeline_handle_discard_invalidates_failure_handle_and_clears_exception() -> None:
+    record = make_pipeline_record(state=PipelineState.FAILED)
+    record.exception = RuntimeError("boom")
+    handle = stagegate.PipelineHandle(record)
+
+    handle.discard()
+
+    assert record.pipeline is None
+    assert record.result_value is None
+    assert record.exception is None
+    with pytest.raises(stagegate.DiscardedHandleError):
+        handle.result()
+    with pytest.raises(stagegate.DiscardedHandleError):
+        handle.exception()
+
+
+def test_pipeline_handle_discard_is_idempotent() -> None:
+    handle = stagegate.PipelineHandle(
+        make_pipeline_record(state=PipelineState.CANCELLED)
+    )
+
+    handle.discard()
+    handle.discard()
+
+    with pytest.raises(stagegate.DiscardedHandleError):
+        handle.done()
+
+
 @pytest.mark.parametrize("method_name", ["result", "exception"])
 def test_task_handle_negative_timeout_raises_value_error(method_name: str) -> None:
     handle = stagegate.TaskHandle(make_task_record())

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._records import TerminalPipelineState, TerminalTaskState
 from ._states import PipelineState, TaskState
-from .exceptions import CancelledError
+from .exceptions import CancelledError, DiscardedHandleError
 from .snapshots import PipelineSnapshot, TaskCountsSnapshot, pipeline_state_to_public_name
 
 if TYPE_CHECKING:
@@ -159,22 +159,46 @@ class PipelineHandle:
                 return True
             return False
 
+    def discard(self) -> None:
+        """Discard this handle and release retained terminal outcome data."""
+        scheduler = self._record.scheduler
+        with scheduler._condition:
+            if self._record.discarded:
+                return
+            if self._record.state not in TerminalPipelineState:
+                raise RuntimeError("discard() requires a terminal pipeline handle")
+
+            self._record.discarded = True
+            self._record.pipeline = None
+            self._record.result_value = None
+            self._record.exception = None
+            self._record.coordinator_thread_ident = None
+
+    def _ensure_not_discarded_locked(self) -> None:
+        if self._record.discarded:
+            raise DiscardedHandleError(
+                "operation was requested from a discarded pipeline handle"
+            )
+
     def done(self) -> bool:
         """Return whether the pipeline is terminal."""
         scheduler = self._record.scheduler
         with scheduler._condition:
+            self._ensure_not_discarded_locked()
             return self._record.state in TerminalPipelineState
 
     def running(self) -> bool:
         """Return whether the pipeline ``run()`` method is active."""
         scheduler = self._record.scheduler
         with scheduler._condition:
+            self._ensure_not_discarded_locked()
             return self._record.state is PipelineState.RUNNING
 
     def cancelled(self) -> bool:
         """Return whether the pipeline ended in the cancelled state."""
         scheduler = self._record.scheduler
         with scheduler._condition:
+            self._ensure_not_discarded_locked()
             return self._record.state is PipelineState.CANCELLED
 
     def result(self, timeout: float | None = None) -> Any:
@@ -183,6 +207,7 @@ class PipelineHandle:
         scheduler = self._record.scheduler
         deadline = None if timeout is None else time.monotonic() + timeout
         with scheduler._condition:
+            self._ensure_not_discarded_locked()
             while self._record.state not in TerminalPipelineState:
                 wait_timeout = (
                     None if deadline is None else _remaining_timeout(deadline)
@@ -204,6 +229,7 @@ class PipelineHandle:
         scheduler = self._record.scheduler
         deadline = None if timeout is None else time.monotonic() + timeout
         with scheduler._condition:
+            self._ensure_not_discarded_locked()
             while self._record.state not in TerminalPipelineState:
                 wait_timeout = (
                     None if deadline is None else _remaining_timeout(deadline)
@@ -223,6 +249,7 @@ class PipelineHandle:
         """Return an immutable point-in-time snapshot for this pipeline."""
         scheduler = self._record.scheduler
         with scheduler._condition:
+            self._ensure_not_discarded_locked()
             tasks = TaskCountsSnapshot(
                 queued=self._record.queued_task_count,
                 admitted=self._record.admitted_task_count,

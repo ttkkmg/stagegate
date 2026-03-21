@@ -76,7 +76,7 @@ class PipelineRecord:
     """Mutable source-of-truth record for one pipeline instance."""
 
     scheduler: Scheduler
-    pipeline: Pipeline
+    pipeline: Pipeline | None
     pipeline_id: int
     enqueue_seq: int
     state: PipelineState = PipelineState.QUEUED
@@ -85,6 +85,7 @@ class PipelineRecord:
     result_value: Any = None
     exception: BaseException | None = None
     coordinator_thread_ident: int | None = None
+    discarded: bool = False
     queued_task_count: int = 0
     admitted_task_count: int = 0
     running_task_count: int = 0

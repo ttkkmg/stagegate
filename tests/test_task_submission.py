@@ -145,6 +145,8 @@ def test_task_builder_run_returns_task_handle_and_registers_task() -> None:
 def test_task_builder_run_assigns_monotonic_local_and_global_sequences() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 4})
     pipeline, pipeline_record = bind_running_pipeline(scheduler, stage_index=2)
+    with scheduler._condition:
+        scheduler._reserve_resources_locked({"cpu": 4})
 
     first = pipeline.task(lambda: None, resources={"cpu": 1}).run()
     second = pipeline.task(lambda: None, resources={"cpu": 1}).run()
@@ -154,6 +156,13 @@ def test_task_builder_run_assigns_monotonic_local_and_global_sequences() -> None
     assert first._record.global_task_submit_seq == 1
     assert second._record.global_task_submit_seq == 2
     assert pipeline_record.next_task_seq == 2
+    with scheduler._condition:
+        scheduler._release_resources_locked({"cpu": 4})
+        scheduler._notify_state_change_locked()
+        pipeline_record.state = PipelineState.SUCCEEDED
+        pipeline_record.coordinator_thread_ident = None
+        scheduler._notify_state_change_locked()
+    scheduler.close()
 
 
 def test_task_builder_run_uses_stage_snapshot_at_submit_time() -> None:

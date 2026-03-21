@@ -183,6 +183,39 @@ def test_terminal_pipeline_may_still_have_live_child_tasks() -> None:
     assert pipeline.task_handle.result(timeout=1.0) == "child-done"
 
 
+def test_discarded_terminal_pipeline_may_still_have_live_child_tasks() -> None:
+    scheduler = stagegate.Scheduler(
+        resources={"cpu": 2},
+        pipeline_parallelism=1,
+        task_parallelism=1,
+    )
+    pipeline = DetachedTaskPipeline()
+
+    handle = scheduler.run_pipeline(pipeline)
+
+    assert handle.result(timeout=1.0) == "pipeline-done"
+    assert pipeline.task_handle is not None
+
+    with scheduler._condition:
+        assert handle._record.task_records
+
+    handle.discard()
+
+    with scheduler._condition:
+        assert handle._record.pipeline is None
+        assert handle._record.result_value is None
+        assert handle._record.exception is None
+        assert handle._record.task_records
+
+    with pytest.raises(stagegate.DiscardedHandleError):
+        handle.snapshot()
+
+    pipeline.task_release.set()
+    assert pipeline.task_handle.result(timeout=1.0) == "child-done"
+    with scheduler._condition:
+        assert not handle._record.task_records
+
+
 def test_stage_forward_rejects_outside_active_control_context() -> None:
     pipeline = stagegate.Pipeline()
 

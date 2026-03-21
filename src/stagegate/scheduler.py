@@ -635,7 +635,9 @@ class Scheduler:
             result_value = None
             error: BaseException | None = None
             try:
-                result_value = record.pipeline.run()
+                pipeline = record.pipeline
+                assert pipeline is not None
+                result_value = pipeline.run()
             except BaseException as exc:
                 # Background runtime must preserve scheduler invariants even for
                 # non-Exception failures raised by user code.

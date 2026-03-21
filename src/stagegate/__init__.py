@@ -1,6 +1,11 @@
 """Public package namespace for stage-aware local pipeline execution."""
 
-from .exceptions import CancelledError, UnknownResourceError, UnschedulableTaskError
+from .exceptions import (
+    CancelledError,
+    DiscardedHandleError,
+    UnknownResourceError,
+    UnschedulableTaskError,
+)
 from .handles import PipelineHandle, TaskHandle
 from .pipeline import Pipeline
 from .scheduler import Scheduler
@@ -22,6 +27,7 @@ __all__ = [
     "FIRST_EXCEPTION",
     "ALL_COMPLETED",
     "CancelledError",
+    "DiscardedHandleError",
     "UnknownResourceError",
     "UnschedulableTaskError",
     "ResourceSnapshot",

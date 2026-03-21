@@ -273,7 +273,57 @@ finally:
 
 This is where `Scheduler.wait_pipelines(...)` belongs. Inside `Pipeline.run()`, use `Pipeline.wait(...)` for task handles.
 
-## 6. What To Avoid Expecting
+## 6. Long-Lived Batch Loops with `discard()`
+
+When the outer script submits many pipelines over time, it may be useful to
+drop pipeline-handle observation state as soon as each result has been recorded.
+
+Pseudo-code:
+
+```python
+scheduler = stagegate.Scheduler(
+    resources={"cpu": 32, "mem": 256},
+    pipeline_parallelism=4,
+    task_parallelism=8,
+)
+try:
+    pending = {
+        scheduler.run_pipeline(MultiStartPipeline(starts))
+        for starts in parameter_sweep()
+    }
+
+    while pending:
+        done, pending = scheduler.wait_pipelines(
+            pending,
+            return_when=stagegate.FIRST_COMPLETED,
+        )
+        for handle in done:
+            try:
+                output = handle.result()
+                record_output(output)
+            except Exception as exc:
+                record_failure(exc)
+            finally:
+                handle.discard()
+finally:
+    scheduler.close()
+```
+
+Why it fits:
+
+- the script may run for a long time and keep many pipeline handles in scope
+- once a result or failure has been recorded, the pipeline handle itself may no
+  longer be needed
+- `discard()` lets retained terminal outcome data be dropped explicitly
+- this remains valid even if the discarded pipeline still has detached child
+  tasks draining in the background
+
+Important detail:
+
+- `discard()` invalidates only that `PipelineHandle`
+- separately held `TaskHandle` objects, if any, remain usable
+
+## 7. What To Avoid Expecting
 
 Users should not expect `stagegate` to:
 
