@@ -11,6 +11,12 @@ It is designed for batch workloads where users want predictable scheduling behav
 
 Because the runtime is based on Python threads, task suitability depends on the GIL. In practice, `stagegate` is a better fit for tasks that spend meaningful time in NumPy, SciPy, Pandas, or other C-extension code, or for tasks that call external programs via `subprocess.run(...)`, than for long pure-Python CPU-bound loops.
 
+For long-running running tasks, `stagegate` also supports cooperative terminate:
+
+- `TaskHandle.request_terminate()` for queued/ready/running tasks
+- `stagegate.terminate_requested()` for polling inside task code
+- `stagegate.run_subprocess(...)` for process-group-based `SIGTERM` / `SIGKILL`
+
 ## What It Is For
 
 `stagegate` fits workloads such as:
@@ -38,7 +44,12 @@ pip install stagegate
 - a remote task broker
 - a forced-termination runtime
 
-Running tasks and running pipelines are never force-killed by the scheduler.
+The scheduler itself does not forcibly stop running Python tasks or running
+pipelines.
+Cooperative terminate is opt-in: if user task code polls
+`stagegate.terminate_requested()` or uses `stagegate.run_subprocess(...)`, that
+task may then exit cooperatively, and the subprocess helper may escalate from
+`SIGTERM` to `SIGKILL` for its child process group when requested.
 
 ## Quick Example
 
@@ -144,8 +155,11 @@ Top-level exports:
 - `stagegate.ALL_COMPLETED`
 - `stagegate.CancelledError`
 - `stagegate.DiscardedHandleError`
+- `stagegate.TerminatedError`
 - `stagegate.UnknownResourceError`
 - `stagegate.UnschedulableTaskError`
+- `stagegate.terminate_requested`
+- `stagegate.run_subprocess`
 - `stagegate.ResourceSnapshot`
 - `stagegate.TaskCountsSnapshot`
 - `stagegate.PipelineCountsSnapshot`
@@ -164,6 +178,8 @@ Pseudo-code walkthroughs based on the project use-case spec:
 - system administration and log collection
 - top-level coordination with pipeline handles
 - long-lived batch loops with `PipelineHandle.discard()`
+- cooperative terminate inside NumPy loops
+- cooperative terminate for external processes with `run_subprocess()`
 
 Use-case guide: [USE_CASES.md](https://github.com/ttkkmg/stagegate/blob/main/USE_CASES.md)
 
@@ -194,7 +210,10 @@ If the highest-priority queued task cannot run because resources are unavailable
 
 Both support `ALL_COMPLETED`, `FIRST_COMPLETED`, and `FIRST_EXCEPTION`.
 
-## Snapshots and Discard
+For task handles, `FIRST_EXCEPTION` also triggers on cooperative
+`TERMINATED` outcomes.
+
+## Snapshots, Discard, and Cooperative Terminate
 
 For observation without exposing mutable internals:
 
@@ -202,6 +221,13 @@ For observation without exposing mutable internals:
 - `pipeline_handle.snapshot()`
 
 These return immutable aggregate dataclasses.
+
+For cooperative terminate:
+
+- call `task_handle.request_terminate()` to request stop
+- poll `stagegate.terminate_requested()` inside long-running task code
+- use `stagegate.run_subprocess(...)` when the task mainly launches an
+  external process and should send `SIGTERM` to its process group
 
 For long-lived scripts that keep many pipeline handles in scope:
 

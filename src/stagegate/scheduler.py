@@ -7,6 +7,7 @@ import math
 import threading
 from typing import TYPE_CHECKING
 
+from ._task_context import TaskContext, clear_task_context, install_task_context
 from ._records import (
     PipelineQueueEntry,
     PipelineRecord,
@@ -16,7 +17,7 @@ from ._records import (
     TaskRecord,
 )
 from ._states import PipelineState, SchedulerState, TaskState
-from .exceptions import UnknownResourceError, UnschedulableTaskError
+from .exceptions import TerminatedError, UnknownResourceError, UnschedulableTaskError
 from .handles import PipelineHandle
 from .pipeline import Pipeline
 from .snapshots import (
@@ -129,12 +130,14 @@ class Scheduler:
                 running=running_tasks,
                 succeeded=self._runtime.succeeded_task_count,
                 failed=self._runtime.failed_task_count,
+                terminated=self._runtime.terminated_task_count,
                 cancelled=self._runtime.cancelled_task_count,
                 total=(
                     queued_tasks
                     + self._runtime.admitted_task_count
                     + self._runtime.succeeded_task_count
                     + self._runtime.failed_task_count
+                    + self._runtime.terminated_task_count
                     + self._runtime.cancelled_task_count
                 ),
             )
@@ -143,7 +146,8 @@ class Scheduler:
                     label=label,
                     capacity=self._resources[label],
                     in_use=self._runtime.resources_in_use[label],
-                    available=self._resources[label] - self._runtime.resources_in_use[label],
+                    available=self._resources[label]
+                    - self._runtime.resources_in_use[label],
                 )
                 for label in sorted(self._resources)
             )
@@ -312,7 +316,10 @@ class Scheduler:
         return threads
 
     def _is_runtime_thread_locked(self, thread_ident: int) -> bool:
-        if self._dispatcher_thread is not None and self._dispatcher_thread.ident == thread_ident:
+        if (
+            self._dispatcher_thread is not None
+            and self._dispatcher_thread.ident == thread_ident
+        ):
             return True
         if any(thread.ident == thread_ident for thread in self._worker_threads):
             return True
@@ -339,6 +346,27 @@ class Scheduler:
                 state=TaskState.CANCELLED,
                 release_resources=True,
             )
+            self._notify_state_change_locked()
+            return True
+        return False
+
+    def _request_task_terminate_if_possible_locked(self, record: TaskRecord) -> bool:
+        if record.state is TaskState.QUEUED:
+            self._finalize_task_terminal_locked(record, state=TaskState.CANCELLED)
+            self._notify_state_change_locked()
+            return True
+        if record.state is TaskState.READY:
+            self._finalize_task_terminal_locked(
+                record,
+                state=TaskState.CANCELLED,
+                release_resources=True,
+            )
+            self._notify_state_change_locked()
+            return True
+        if record.state is TaskState.RUNNING:
+            record.termination_requested = True
+            if record.active_context is not None:
+                record.active_context.request_terminate()
             self._notify_state_change_locked()
             return True
         return False
@@ -515,8 +543,14 @@ class Scheduler:
             record.exception = exception
             pipeline_record.failed_task_count += 1
             self._runtime.failed_task_count += 1
+        elif state is TaskState.TERMINATED:
+            record.result_value = None
+            record.exception = exception
+            pipeline_record.terminated_task_count += 1
+            self._runtime.terminated_task_count += 1
         else:
             record.result_value = None
+            record.exception = None
             pipeline_record.cancelled_task_count += 1
             self._runtime.cancelled_task_count += 1
 
@@ -529,6 +563,7 @@ class Scheduler:
 
         self._runtime.task_records.pop(record.task_id, None)
         pipeline_record.task_records.discard(record)
+        record.active_context = None
 
         record.fn = lambda: None
         record.resources_required = {}
@@ -590,18 +625,28 @@ class Scheduler:
                 record.state = TaskState.RUNNING
                 record.ready_seq = None
                 record.worker_thread_ident = worker_ident
+                task_context = TaskContext(
+                    task_id=record.task_id,
+                    pipeline_id=record.pipeline_record.pipeline_id,
+                    terminate_requested=record.termination_requested,
+                )
+                record.active_context = task_context
                 self._condition.notify_all()
 
             result_value = None
             error: BaseException | None = None
+            install_task_context(task_context)
             try:
                 result_value = record.fn(*record.args, **record.kwargs)
             except BaseException as exc:
                 # Background runtime must preserve scheduler invariants even for
                 # non-Exception failures raised by user code.
                 error = exc
+            finally:
+                clear_task_context()
 
             with self._condition:
+                record.active_context = None
                 if error is None:
                     self._finalize_task_terminal_locked(
                         record,
@@ -609,9 +654,15 @@ class Scheduler:
                         result_value=result_value,
                     )
                 else:
+                    terminal_state = TaskState.FAILED
+                    if (
+                        isinstance(error, TerminatedError)
+                        and record.termination_requested
+                    ):
+                        terminal_state = TaskState.TERMINATED
                     self._finalize_task_terminal_locked(
                         record,
-                        state=TaskState.FAILED,
+                        state=terminal_state,
                         exception=error,
                     )
                 self._notify_state_change_locked()

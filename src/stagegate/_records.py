@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ._task_context import TaskContext
 from ._states import PipelineState, SchedulerState, TaskState
 
 if TYPE_CHECKING:
@@ -18,6 +19,7 @@ TerminalTaskState = frozenset(
     {
         TaskState.SUCCEEDED,
         TaskState.FAILED,
+        TaskState.TERMINATED,
         TaskState.CANCELLED,
     }
 )
@@ -91,6 +93,7 @@ class PipelineRecord:
     running_task_count: int = 0
     succeeded_task_count: int = 0
     failed_task_count: int = 0
+    terminated_task_count: int = 0
     cancelled_task_count: int = 0
     total_task_count: int = 0
     task_records: set[TaskRecord] = field(default_factory=set)
@@ -122,6 +125,8 @@ class TaskRecord:
     exception: BaseException | None = None
     ready_seq: int | None = None
     worker_thread_ident: int | None = None
+    termination_requested: bool = False
+    active_context: TaskContext | None = None
 
     def priority_key(self) -> TaskPriorityKey:
         """Build the ordering key used by the task priority queue."""
@@ -155,6 +160,7 @@ class SchedulerRuntime:
     cancelled_pipeline_count: int = 0
     succeeded_task_count: int = 0
     failed_task_count: int = 0
+    terminated_task_count: int = 0
     cancelled_task_count: int = 0
     pipeline_queue: deque[PipelineQueueEntry] = field(default_factory=deque)
     task_queue: list[TaskQueueEntry] = field(default_factory=list)

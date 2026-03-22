@@ -13,8 +13,11 @@ def test_top_level_namespace_exports_expected_symbols() -> None:
     assert stagegate.ALL_COMPLETED == "ALL_COMPLETED"
     assert issubclass(stagegate.CancelledError, Exception)
     assert issubclass(stagegate.DiscardedHandleError, RuntimeError)
+    assert issubclass(stagegate.TerminatedError, Exception)
     assert issubclass(stagegate.UnknownResourceError, ValueError)
     assert issubclass(stagegate.UnschedulableTaskError, ValueError)
+    assert stagegate.terminate_requested is not None
+    assert stagegate.run_subprocess is not None
     assert stagegate.ResourceSnapshot is not None
     assert stagegate.TaskCountsSnapshot is not None
     assert stagegate.PipelineCountsSnapshot is not None

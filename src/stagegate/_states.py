@@ -31,4 +31,5 @@ class TaskState(Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    TERMINATED = "terminated"
     CANCELLED = "cancelled"

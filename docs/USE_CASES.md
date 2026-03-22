@@ -318,6 +318,138 @@ Why it fits:
 - this remains valid even if the discarded pipeline still has detached child
   tasks draining in the background
 
+## 7. Cooperative Terminate in a NumPy Loop
+
+When a task is mostly a Python loop around chunked NumPy work, the practical
+pattern is to poll `stagegate.terminate_requested()` at safe checkpoints.
+
+Pseudo-code:
+
+```python
+class MultiStartNumpyPipeline(stagegate.Pipeline):
+    def __init__(self, starts) -> None:
+        self.starts = list(starts)
+
+    def run(self):
+        handles = [
+            self.task(run_candidate, resources={"cpu": 1}, args=(x0,)).run()
+            for x0 in self.starts
+        ]
+
+        pending = set(handles)
+        accepted = []
+
+        while pending and len(accepted) < 3:
+            done, pending = self.wait(
+                pending,
+                return_when=stagegate.FIRST_COMPLETED,
+            )
+            for handle in done:
+                try:
+                    accepted.append(handle.result())
+                except Exception:
+                    continue
+
+        for handle in pending:
+            handle.request_terminate()
+
+        done, pending = self.wait(
+            pending,
+            return_when=stagegate.FIRST_EXCEPTION,
+        )
+        for handle in done:
+            try:
+                handle.result()
+            except stagegate.TerminatedError:
+                pass
+
+        self.stage_forward()
+        return summarize(accepted)
+
+
+def run_candidate(x0):
+    current = initialize_state(x0)
+    for _ in range(10_000):
+        current = numpy_step(current)
+        if stagegate.terminate_requested():
+            raise stagegate.TerminatedError(
+                argv=(),
+                pid=None,
+                returncode=None,
+                forced_kill=False,
+            )
+    return current
+```
+
+Why it fits:
+
+- the task stays cooperative without changing the task function signature
+- polling happens at explicit safe points in the loop
+- `FIRST_EXCEPTION` can observe terminated siblings before the next stage
+
+## 8. Cooperative Terminate with `run_subprocess()`
+
+When a task mainly launches an external CLI, `stagegate.run_subprocess(...)`
+provides the terminate-aware path directly.
+
+Pseudo-code:
+
+```python
+class CliSearchPipeline(stagegate.Pipeline):
+    def __init__(self, argv_groups) -> None:
+        self.argv_groups = list(argv_groups)
+
+    def run(self):
+        handles = [
+            self.task(
+                stagegate.run_subprocess,
+                resources={"cpu": 1},
+                args=(argv,),
+            ).run()
+            for argv in self.argv_groups
+        ]
+
+        pending = set(handles)
+        winner = None
+
+        while pending and winner is None:
+            done, pending = self.wait(
+                pending,
+                return_when=stagegate.FIRST_COMPLETED,
+            )
+            for handle in done:
+                try:
+                    returncode = handle.result()
+                except Exception:
+                    continue
+                if returncode == 0:
+                    winner = handle
+                    break
+
+        for handle in pending:
+            handle.request_terminate()
+
+        done, pending = self.wait(
+            pending,
+            return_when=stagegate.FIRST_EXCEPTION,
+        )
+        for handle in done:
+            try:
+                handle.result()
+            except stagegate.TerminatedError:
+                cleanup_partial_outputs()
+
+        self.stage_forward()
+        return finalize_winner(winner)
+```
+
+Why it fits:
+
+- child processes are launched with explicit `argv`
+- terminate requests send `SIGTERM` to the process group
+- if the child ignores `SIGTERM`, `run_subprocess(...)` can escalate to `SIGKILL`
+- the pipeline can wait for terminated siblings, clean up partial files, and continue
+
 Important detail:
 
 - `discard()` invalidates only that `PipelineHandle`
@@ -331,6 +463,5 @@ Users should not expect `stagegate` to:
 - reprioritize already queued tasks after `stage_forward()`
 - bypass a blocked high-priority task with a lower-priority task
 - resume from checkpoints
-- kill already running tasks or pipelines
 
 Those are deliberate design constraints.

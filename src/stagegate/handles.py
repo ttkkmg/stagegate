@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Any
 from ._records import TerminalPipelineState, TerminalTaskState
 from ._states import PipelineState, TaskState
 from .exceptions import CancelledError, DiscardedHandleError
-from .snapshots import PipelineSnapshot, TaskCountsSnapshot, pipeline_state_to_public_name
+from .snapshots import (
+    PipelineSnapshot,
+    TaskCountsSnapshot,
+    pipeline_state_to_public_name,
+)
 
 if TYPE_CHECKING:
     from ._records import PipelineRecord, TaskRecord
@@ -60,6 +64,12 @@ class TaskHandle:
         with scheduler._condition:
             return scheduler._cancel_task_if_possible_locked(self._record)
 
+    def request_terminate(self) -> bool:
+        """Request cooperative termination for this task."""
+        scheduler = self._record.scheduler
+        with scheduler._condition:
+            return scheduler._request_task_terminate_if_possible_locked(self._record)
+
     def done(self) -> bool:
         """Return whether the task is terminal."""
         scheduler = self._record.scheduler
@@ -92,7 +102,7 @@ class TaskHandle:
 
             if self._record.state is TaskState.SUCCEEDED:
                 return self._record.result_value
-            if self._record.state is TaskState.FAILED:
+            if self._record.state in (TaskState.FAILED, TaskState.TERMINATED):
                 assert self._record.exception is not None
                 raise self._record.exception
             raise CancelledError("result() was requested from a cancelled task handle")
@@ -111,7 +121,7 @@ class TaskHandle:
 
             if self._record.state is TaskState.SUCCEEDED:
                 return None
-            if self._record.state is TaskState.FAILED:
+            if self._record.state in (TaskState.FAILED, TaskState.TERMINATED):
                 assert self._record.exception is not None
                 return self._record.exception
             raise CancelledError(
@@ -256,6 +266,7 @@ class PipelineHandle:
                 running=self._record.running_task_count,
                 succeeded=self._record.succeeded_task_count,
                 failed=self._record.failed_task_count,
+                terminated=self._record.terminated_task_count,
                 cancelled=self._record.cancelled_task_count,
                 total=self._record.total_task_count,
             )

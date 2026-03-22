@@ -17,8 +17,11 @@ Public names:
 - `ALL_COMPLETED`
 - `CancelledError`
 - `DiscardedHandleError`
+- `TerminatedError`
 - `UnknownResourceError`
 - `UnschedulableTaskError`
+- `terminate_requested`
+- `run_subprocess`
 - `ResourceSnapshot`
 - `TaskCountsSnapshot`
 - `PipelineCountsSnapshot`
@@ -317,6 +320,165 @@ Arguments:
   Keyword arguments passed to `fn`.
 - `name`
   Optional user-facing label for debugging or future diagnostics.
+
+## `TaskHandle`
+
+### `TaskHandle.cancel()`
+
+```python
+cancel() -> bool
+```
+
+Cancel a task if it has not started yet.
+
+Behavior:
+
+- `QUEUED` or `READY` task: transitions to cancelled and returns `True`
+- `RUNNING` or terminal task: returns `False`
+
+### `TaskHandle.request_terminate()`
+
+```python
+request_terminate() -> bool
+```
+
+Request cooperative termination for a task.
+
+Behavior:
+
+- `QUEUED` or `READY` task: follows the existing cancel path and returns `True`
+- `RUNNING` task: records a cooperative terminate request and returns `True`
+- terminal task: returns `False`
+
+Important details:
+
+- a running-task terminate request does not force-stop Python code
+- resources are released only when the task actually reaches a terminal state
+- repeated requests while running are harmless
+
+### `TaskHandle.done()`, `running()`, `cancelled()`
+
+Predicate helpers:
+
+- `done() -> bool`
+- `running() -> bool`
+- `cancelled() -> bool`
+
+`done()` becomes `True` for:
+
+- succeeded tasks
+- failed tasks
+- cooperatively terminated tasks
+- cancelled tasks
+
+### `TaskHandle.result(timeout=None)`
+
+```python
+result(timeout: float | None = None) -> Any
+```
+
+Return the task result, or re-raise the stored terminal outcome.
+
+Behavior:
+
+- success: returns the callable return value
+- failure: re-raises the stored exception
+- cooperative terminate: raises `TerminatedError`
+- cancelled: raises `CancelledError`
+- timeout expiry: raises `TimeoutError`
+
+### `TaskHandle.exception(timeout=None)`
+
+```python
+exception(timeout: float | None = None) -> BaseException | None
+```
+
+Return the stored exception object.
+
+Behavior:
+
+- success: returns `None`
+- failure: returns the stored exception
+- cooperative terminate: returns `TerminatedError`
+- cancelled: raises `CancelledError`
+
+## Cooperative Terminate Helpers
+
+### `stagegate.terminate_requested()`
+
+```python
+terminate_requested() -> bool
+```
+
+Return whether the current worker task has received a cooperative terminate request.
+
+Notes:
+
+- outside task execution it returns `False`
+- this is intended for polling inside long-running task functions
+
+Example:
+
+```python
+def heavy_loop():
+    while True:
+        step()
+        if stagegate.terminate_requested():
+            raise stagegate.TerminatedError(
+                argv=(),
+                pid=None,
+                returncode=None,
+                forced_kill=False,
+            )
+```
+
+### `stagegate.run_subprocess(...)`
+
+```python
+run_subprocess(
+    argv,
+    *,
+    terminate_grace_seconds: float | None = 5.0,
+) -> int
+```
+
+Run an external program in a terminate-aware way.
+
+Arguments:
+
+- `argv`
+  Explicit executable plus arguments. `shell=True` is not used.
+- `terminate_grace_seconds`
+  Seconds to wait after `SIGTERM` before escalating to `SIGKILL`.
+  `None` means send `SIGTERM` and wait indefinitely.
+  `0` is allowed and means escalate immediately if the process does not exit.
+  Negative values raise `ValueError`.
+
+Behavior:
+
+- starts the child in a new process group
+- uses `stdin=DEVNULL`
+- inherits parent `stdout` and `stderr`
+- on normal completion returns the integer exit code
+- if a task terminate request is observed first, sends `SIGTERM` to the process group
+- if needed, sends `SIGKILL` after the grace timeout
+- after terminate-path completion, raises `TerminatedError`
+
+### `stagegate.TerminatedError`
+
+```python
+class TerminatedError(Exception)
+```
+
+Raised when a task terminates cooperatively after a terminate request, including
+the `run_subprocess(...)` terminate path.
+
+Attributes:
+
+- `argv: tuple[str, ...]`
+- `pid: int | None`
+- `returncode: int | None`
+- `forced_kill: bool`
 
 Returns:
 

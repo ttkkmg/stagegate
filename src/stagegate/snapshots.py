@@ -26,6 +26,7 @@ class TaskCountsSnapshot:
     running: int
     succeeded: int
     failed: int
+    terminated: int
     cancelled: int
     total: int
 

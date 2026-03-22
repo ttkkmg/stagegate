@@ -3,12 +3,14 @@
 from .exceptions import (
     CancelledError,
     DiscardedHandleError,
+    TerminatedError,
     UnknownResourceError,
     UnschedulableTaskError,
 )
 from .handles import PipelineHandle, TaskHandle
 from .pipeline import Pipeline
 from .scheduler import Scheduler
+from .subprocesses import run_subprocess
 from .snapshots import (
     PipelineCountsSnapshot,
     PipelineSnapshot,
@@ -16,6 +18,7 @@ from .snapshots import (
     SchedulerSnapshot,
     TaskCountsSnapshot,
 )
+from ._task_context import terminate_requested
 from .wait import ALL_COMPLETED, FIRST_COMPLETED, FIRST_EXCEPTION
 
 __all__ = [
@@ -28,8 +31,11 @@ __all__ = [
     "ALL_COMPLETED",
     "CancelledError",
     "DiscardedHandleError",
+    "TerminatedError",
     "UnknownResourceError",
     "UnschedulableTaskError",
+    "terminate_requested",
+    "run_subprocess",
     "ResourceSnapshot",
     "TaskCountsSnapshot",
     "PipelineCountsSnapshot",

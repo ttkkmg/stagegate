@@ -93,5 +93,5 @@ def remaining_timeout(deadline: float | None) -> float | None:
 
 def _is_failed(handle: HandleT) -> bool:
     if isinstance(handle, TaskHandle):
-        return handle._record.state is TaskState.FAILED
+        return handle._record.state in (TaskState.FAILED, TaskState.TERMINATED)
     return handle._record.state is PipelineState.FAILED

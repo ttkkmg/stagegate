@@ -110,6 +110,41 @@ def test_task_handle_cancel_ready_task_transitions_to_cancelled() -> None:
     assert record.state is TaskState.CANCELLED
 
 
+def test_task_handle_request_terminate_queued_task_transitions_to_cancelled() -> None:
+    record = make_task_record(state=TaskState.QUEUED)
+    handle = stagegate.TaskHandle(record)
+
+    assert handle.request_terminate() is True
+    assert record.state is TaskState.CANCELLED
+
+
+def test_task_handle_request_terminate_ready_task_transitions_to_cancelled() -> None:
+    record = make_task_record(state=TaskState.READY)
+    handle = stagegate.TaskHandle(record)
+
+    assert handle.request_terminate() is True
+    assert record.state is TaskState.CANCELLED
+
+
+def test_task_handle_request_terminate_running_task_sets_request_only() -> None:
+    record = make_task_record(state=TaskState.RUNNING)
+    handle = stagegate.TaskHandle(record)
+
+    assert handle.request_terminate() is True
+    assert record.state is TaskState.RUNNING
+    assert getattr(record, "termination_requested") is True
+
+
+def test_task_handle_request_terminate_running_task_is_harmless_when_repeated() -> None:
+    record = make_task_record(state=TaskState.RUNNING)
+    handle = stagegate.TaskHandle(record)
+
+    assert handle.request_terminate() is True
+    assert handle.request_terminate() is True
+    assert record.state is TaskState.RUNNING
+    assert getattr(record, "termination_requested") is True
+
+
 @pytest.mark.parametrize(
     "state",
     [TaskState.RUNNING, TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED],
@@ -121,6 +156,20 @@ def test_task_handle_cancel_running_or_terminal_task_returns_false(
     handle = stagegate.TaskHandle(record)
 
     assert handle.cancel() is False
+    assert record.state is state
+
+
+@pytest.mark.parametrize(
+    "state",
+    [TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED],
+)
+def test_task_handle_request_terminate_terminal_task_returns_false(
+    state: TaskState,
+) -> None:
+    record = make_task_record(state=state)
+    handle = stagegate.TaskHandle(record)
+
+    assert handle.request_terminate() is False
     assert record.state is state
 
 
@@ -225,7 +274,9 @@ def test_pipeline_handle_discard_requires_terminal_pipeline(
         handle.discard()
 
 
-def test_pipeline_handle_discard_invalidates_observation_methods_and_clears_result() -> None:
+def test_pipeline_handle_discard_invalidates_observation_methods_and_clears_result() -> (
+    None
+):
     record = make_pipeline_record(state=PipelineState.SUCCEEDED)
     record.result_value = {"payload": "ok"}
     handle = stagegate.PipelineHandle(record)
@@ -247,7 +298,9 @@ def test_pipeline_handle_discard_invalidates_observation_methods_and_clears_resu
             getattr(handle, method_name)()
 
 
-def test_pipeline_handle_discard_invalidates_failure_handle_and_clears_exception() -> None:
+def test_pipeline_handle_discard_invalidates_failure_handle_and_clears_exception() -> (
+    None
+):
     record = make_pipeline_record(state=PipelineState.FAILED)
     record.exception = RuntimeError("boom")
     handle = stagegate.PipelineHandle(record)
