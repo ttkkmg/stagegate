@@ -43,9 +43,10 @@ Changelog = "https://github.com/ttkkmg/stagegate/releases"
 dev = [
     "mypy>=1.19.1",
     "pytest>=9.0.2",
+    "myst-parser>=4.0.1",
+    "sphinx>=8.2.3",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-

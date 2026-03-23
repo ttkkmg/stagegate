@@ -43,7 +43,16 @@ if TYPE_CHECKING:
 
 
 class Scheduler:
-    """Single-process scheduler for stage-aware local pipelines and tasks."""
+    """Single-process scheduler for stage-aware local pipelines and tasks.
+
+    Args:
+        resources: Abstract resource capacities such as ``{"cpu": 8}``.
+            These are scheduler-defined admission labels, not OS-enforced
+            quotas.
+        pipeline_parallelism: Maximum number of pipeline coordinator threads.
+        task_parallelism: Maximum number of concurrently admitted tasks. If
+            ``None``, the effective worker count is ``1``.
+    """
 
     def __init__(
         self,
@@ -70,25 +79,49 @@ class Scheduler:
         self._runtime_stop_requested = False
 
     def __enter__(self) -> Scheduler:
-        """Return the scheduler for use as a context manager."""
+        """Return the scheduler for use as a context manager.
+
+        Returns:
+            Scheduler: The scheduler itself.
+        """
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Fully close the scheduler when leaving a context-manager block."""
+        """Fully close the scheduler when leaving a context-manager block.
+
+        Args:
+            exc_type: Exception type from the context manager protocol.
+            exc: Exception instance from the context manager protocol.
+            tb: Traceback object from the context manager protocol.
+        """
         self.close()
 
     def shutdown_started(self) -> bool:
-        """Return whether shutdown has begun."""
+        """Return whether shutdown has begun.
+
+        Returns:
+            bool: ``True`` once the scheduler has left the open state.
+        """
         with self._condition:
             return self._runtime.state is not SchedulerState.OPEN
 
     def closed(self) -> bool:
-        """Return whether the scheduler has fully closed."""
+        """Return whether the scheduler has fully closed.
+
+        Returns:
+            bool: ``True`` only after live work has drained and runtime threads
+                have been joined.
+        """
         with self._condition:
             return self._runtime.state is SchedulerState.CLOSED
 
     def snapshot(self) -> SchedulerSnapshot:
-        """Return an immutable point-in-time snapshot of scheduler state."""
+        """Return an immutable point-in-time snapshot of scheduler state.
+
+        Returns:
+            SchedulerSnapshot: Detached aggregate view of scheduler state,
+                counts, and resources.
+        """
         with self._condition:
             queued_pipelines = sum(
                 1
@@ -162,7 +195,19 @@ class Scheduler:
             )
 
     def run_pipeline(self, pipeline: Pipeline) -> PipelineHandle:
-        """Submit a pipeline instance for FIFO execution and return its handle."""
+        """Submit a pipeline instance for FIFO execution and return its handle.
+
+        Args:
+            pipeline: Pipeline instance to enqueue.
+
+        Returns:
+            PipelineHandle: Handle for observing the submitted pipeline.
+
+        Raises:
+            TypeError: If ``pipeline`` is not a ``Pipeline`` instance.
+            RuntimeError: If shutdown has already started or the same pipeline
+                instance was submitted previously.
+        """
         if not isinstance(pipeline, Pipeline):
             raise TypeError("pipeline must be a Pipeline instance")
 
@@ -213,7 +258,23 @@ class Scheduler:
         timeout: float | None = None,
         return_when: str = ALL_COMPLETED,
     ) -> tuple[set[PipelineHandle], set[PipelineHandle]]:
-        """Wait for pipeline handles owned by this scheduler."""
+        """Wait for pipeline handles owned by this scheduler.
+
+        Args:
+            handles: Pipeline handles created by this scheduler.
+            timeout: Maximum wait time in seconds. ``None`` means unbounded
+                wait and ``0`` means immediate poll.
+            return_when: One of the public wait-condition constants.
+
+        Returns:
+            tuple[set[PipelineHandle], set[PipelineHandle]]: A ``(done, pending)``
+                pair.
+
+        Raises:
+            TypeError: If a non-pipeline handle is provided.
+            ValueError: If ``handles`` is empty, ownership is wrong, timeout is
+                invalid, or ``return_when`` is invalid.
+        """
         # Concrete implementation must validate return_when against WAIT_CONDITIONS.
         normalized = validate_wait_request(
             handles,
@@ -236,7 +297,12 @@ class Scheduler:
                 self._condition.wait(wait_timeout)
 
     def shutdown(self, cancel_pending_pipelines: bool = False) -> None:
-        """Start shutdown without waiting for full close."""
+        """Start shutdown without waiting for full close.
+
+        Args:
+            cancel_pending_pipelines: Whether queued pipelines should be
+                cancelled during shutdown processing.
+        """
         with self._condition:
             if self._runtime.state is SchedulerState.CLOSED:
                 return
@@ -250,7 +316,15 @@ class Scheduler:
             self._condition.notify_all()
 
     def close(self, cancel_pending_pipelines: bool = False) -> None:
-        """Block until shutdown completes and runtime threads have exited."""
+        """Block until shutdown completes and runtime threads have exited.
+
+        Args:
+            cancel_pending_pipelines: Whether queued pipelines should be
+                cancelled during close processing.
+
+        Raises:
+            RuntimeError: If called from a scheduler-owned runtime thread.
+        """
         current_ident = threading.get_ident()
         with self._condition:
             if self._is_runtime_thread_locked(current_ident):

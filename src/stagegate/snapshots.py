@@ -9,7 +9,14 @@ from ._states import PipelineState
 
 @dataclass(frozen=True, slots=True)
 class ResourceSnapshot:
-    """Immutable point-in-time view of one configured resource label."""
+    """Immutable point-in-time view of one configured resource label.
+
+    Attributes:
+        label: Scheduler-defined resource label.
+        capacity: Total configured capacity for the resource.
+        in_use: Current reserved amount.
+        available: Remaining unreserved amount.
+    """
 
     label: str
     capacity: int | float
@@ -19,7 +26,18 @@ class ResourceSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class TaskCountsSnapshot:
-    """Immutable aggregate task counts."""
+    """Immutable aggregate task counts.
+
+    Attributes:
+        queued: Number of queued tasks.
+        admitted: Number of admitted tasks, including running tasks.
+        running: Number of actively running tasks.
+        succeeded: Number of succeeded tasks.
+        failed: Number of failed tasks.
+        terminated: Number of cooperatively terminated tasks.
+        cancelled: Number of cancelled tasks.
+        total: Total number of tasks represented by the snapshot.
+    """
 
     queued: int
     admitted: int
@@ -33,7 +51,16 @@ class TaskCountsSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PipelineCountsSnapshot:
-    """Immutable aggregate pipeline counts."""
+    """Immutable aggregate pipeline counts.
+
+    Attributes:
+        queued: Number of queued pipelines.
+        running: Number of running pipelines.
+        succeeded: Number of succeeded pipelines.
+        failed: Number of failed pipelines.
+        cancelled: Number of cancelled pipelines.
+        total: Total number of pipelines represented by the snapshot.
+    """
 
     queued: int
     running: int
@@ -45,7 +72,17 @@ class PipelineCountsSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerSnapshot:
-    """Immutable scheduler-wide snapshot."""
+    """Immutable scheduler-wide snapshot.
+
+    Attributes:
+        shutdown_started: Whether shutdown has begun.
+        closed: Whether the scheduler is fully closed.
+        pipeline_parallelism: Configured number of pipeline coordinator slots.
+        task_parallelism: Effective task parallelism.
+        pipelines: Aggregate pipeline counts.
+        tasks: Aggregate task counts.
+        resources: Deterministically ordered resource snapshots.
+    """
 
     shutdown_started: bool
     closed: bool
@@ -58,7 +95,14 @@ class SchedulerSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PipelineSnapshot:
-    """Immutable per-pipeline snapshot."""
+    """Immutable per-pipeline snapshot.
+
+    Attributes:
+        pipeline_id: Stable local identifier for the pipeline.
+        state: Public string representation of the pipeline state.
+        stage_index: Current pipeline stage index.
+        tasks: Aggregate task counts for that pipeline only.
+    """
 
     pipeline_id: int
     state: str

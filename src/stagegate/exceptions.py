@@ -2,11 +2,25 @@
 
 
 class CancelledError(Exception):
-    """Raised when result() or exception() is requested from a cancelled handle."""
+    """Raised when a cancelled handle is observed as if it had a result.
+
+    This exception is used by both task and pipeline handles when
+    ``result()`` or ``exception()`` is requested after a queued item was
+    cancelled before start.
+    """
 
 
 class TerminatedError(Exception):
-    """Raised when a task or helper terminates cooperatively after a request."""
+    """Raised when a task terminates cooperatively after a terminate request.
+
+    Attributes:
+        argv: Command-line arguments associated with the terminated subprocess,
+            or an empty tuple when no subprocess metadata exists.
+        pid: Process identifier for the terminated subprocess, if any.
+        returncode: Observed subprocess return code, if any.
+        forced_kill: Whether the subprocess helper had to escalate from
+            ``SIGTERM`` to ``SIGKILL``.
+    """
 
     def __init__(
         self,
@@ -16,6 +30,14 @@ class TerminatedError(Exception):
         returncode: int | None,
         forced_kill: bool,
     ) -> None:
+        """Initialize a termination exception with optional subprocess details.
+
+        Args:
+            argv: Command-line arguments associated with the termination path.
+            pid: Process identifier for the subprocess, if any.
+            returncode: Observed subprocess return code, if any.
+            forced_kill: Whether a forced kill was required.
+        """
         self.argv = argv
         self.pid = pid
         self.returncode = returncode

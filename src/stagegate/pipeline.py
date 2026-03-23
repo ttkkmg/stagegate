@@ -26,7 +26,16 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class TaskBuilder:
-    """Factory object returned by ``Pipeline.task(...)``."""
+    """Factory object returned by ``Pipeline.task(...)``.
+
+    Attributes:
+        pipeline: Owning pipeline instance.
+        fn: Callable to execute later on a worker thread.
+        resources: Abstract resource requirements for admission control.
+        args: Positional arguments passed to ``fn``.
+        kwargs: Keyword arguments passed to ``fn``.
+        name: Optional user-facing task label.
+    """
 
     pipeline: Pipeline
     fn: Callable[..., Any]
@@ -36,7 +45,20 @@ class TaskBuilder:
     name: str | None = None
 
     def run(self) -> TaskHandle:
-        """Submit the task to the owning scheduler and return its handle."""
+        """Submit the task to the owning scheduler and return its handle.
+
+        Returns:
+            TaskHandle: Handle for observing the submitted task.
+
+        Raises:
+            RuntimeError: If called outside the active coordinator-thread
+                control context for the owning pipeline.
+            UnknownResourceError: If a requested resource label is unknown to
+                the scheduler.
+            UnschedulableTaskError: If the task can never fit within scheduler
+                capacity.
+            ValueError: If resource amounts are invalid.
+        """
         pipeline = self.pipeline
         scheduler, _ = pipeline._require_control_context()
         with scheduler._condition:
@@ -44,14 +66,30 @@ class TaskBuilder:
 
 
 class Pipeline:
-    """Base class for user-defined pipelines."""
+    """Base class for user-defined pipelines.
+
+    Subclass this type and override :meth:`run` with the pipeline body.
+    Pipeline-control APIs such as :meth:`task`, :meth:`wait`, and
+    :meth:`stage_forward` are valid only while ``run()`` is executing on the
+    scheduler-owned coordinator thread.
+    """
 
     _stagegate_record: PipelineRecord | None = None
     _stagegate_scheduler: Scheduler | None = None
     _stagegate_submitted: bool = False
 
     def run(self) -> Any:
-        """Execute pipeline logic on a scheduler-owned coordinator thread."""
+        """Execute pipeline logic on a scheduler-owned coordinator thread.
+
+        Returns:
+            Any: Arbitrary pipeline result object. Returning normally marks the
+                pipeline as succeeded.
+
+        Raises:
+            Exception: Any uncaught exception raised by user code marks the
+                pipeline as failed and is later re-raised by the pipeline
+                handle.
+        """
         raise NotImplementedError
 
     def _require_control_context(self):
@@ -76,7 +114,19 @@ class Pipeline:
         kwargs: dict[str, Any] | None = None,
         name: str | None = None,
     ) -> TaskBuilder:
-        """Create a task builder for later submission via ``.run()``."""
+        """Create a task builder for later submission via ``.run()``.
+
+        Args:
+            fn: Callable to execute later on a worker thread.
+            resources: Abstract resource requirements for admission control.
+            args: Positional arguments passed to ``fn``.
+            kwargs: Keyword arguments passed to ``fn``.
+            name: Optional user-facing task label.
+
+        Returns:
+            TaskBuilder: Builder object that can later be submitted with
+                ``.run()``.
+        """
         return TaskBuilder(
             pipeline=self,
             fn=fn,
@@ -87,7 +137,12 @@ class Pipeline:
         )
 
     def stage_forward(self) -> None:
-        """Advance the pipeline stage used by future task submissions."""
+        """Advance the pipeline stage used by future task submissions.
+
+        Raises:
+            RuntimeError: If called outside the active coordinator-thread
+                control context for the pipeline.
+        """
         scheduler, record = self._require_control_context()
         with scheduler._condition:
             record.stage_index += 1
@@ -98,7 +153,24 @@ class Pipeline:
         timeout: float | None = None,
         return_when: str = ALL_COMPLETED,
     ) -> tuple[set[TaskHandle], set[TaskHandle]]:
-        """Wait for task handles created by this pipeline."""
+        """Wait for task handles created by this pipeline.
+
+        Args:
+            handles: Task handles created by this pipeline.
+            timeout: Maximum wait time in seconds. ``None`` means unbounded
+                wait and ``0`` means immediate poll.
+            return_when: One of the public wait-condition constants.
+
+        Returns:
+            tuple[set[TaskHandle], set[TaskHandle]]: A ``(done, pending)`` pair.
+
+        Raises:
+            RuntimeError: If called outside the active coordinator-thread
+                control context for the pipeline.
+            TypeError: If a non-task handle is provided.
+            ValueError: If ``handles`` is empty, ownership is wrong, timeout is
+                invalid, or ``return_when`` is invalid.
+        """
         # Concrete implementation must validate return_when against WAIT_CONDITIONS.
         scheduler, _ = self._require_control_context()
         normalized = validate_wait_request(

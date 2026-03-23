@@ -63,7 +63,12 @@ def clear_task_context() -> None:
 
 
 def terminate_requested() -> bool:
-    """Return whether the current task has received a terminate request."""
+    """Return whether the current task has received a terminate request.
+
+    Returns:
+        bool: ``True`` only while user code is running on a worker thread with
+        an ambient task context whose terminate-request flag is set.
+    """
 
     context = current_task_context()
     if context is None:

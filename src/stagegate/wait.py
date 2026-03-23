@@ -1,4 +1,14 @@
-"""Public wait-condition constants used by pipeline and scheduler wait APIs."""
+"""Public wait-condition constants used by wait APIs.
+
+Attributes:
+    FIRST_COMPLETED: Return from a wait call when at least one handle is
+        terminal.
+    FIRST_EXCEPTION: Return from a wait call when at least one handle is in a
+        failure-like terminal state, otherwise behave like
+        ``ALL_COMPLETED``.
+    ALL_COMPLETED: Return from a wait call only when all handles are
+        terminal.
+"""
 
 from __future__ import annotations
 

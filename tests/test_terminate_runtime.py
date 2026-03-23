@@ -8,6 +8,7 @@ import time
 import pytest
 
 import stagegate
+import stagegate.subprocesses as subprocess_helpers
 from stagegate._states import TaskState
 
 
@@ -297,6 +298,13 @@ def test_run_subprocess_rejects_negative_grace_timeout() -> None:
             [str(PROBE_PATH), "0", "0"],
             terminate_grace_seconds=-0.1,
         )
+
+
+def test_run_subprocess_rejects_win32(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subprocess_helpers.sys, "platform", "win32")
+
+    with pytest.raises(NotImplementedError, match="POSIX platforms"):
+        stagegate.run_subprocess(["dummy-command"])
 
 
 def test_run_subprocess_none_grace_timeout_allows_sigterm_only_termination() -> None:
