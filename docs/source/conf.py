@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
+import sphinx_rtd_theme
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -45,5 +46,13 @@ napoleon_numpy_docstring = False
 
 myst_heading_anchors = 3
 
-html_theme = "alabaster"
+html_theme = "sphinx_rtd_theme"
 html_static_path: list[str] = []
+
+html_context = {
+    "display_github": True,
+    "github_user": "ttkkmg",
+    "github_repo": "stagegate",
+    "github_version": "main",
+    "conf_py_path": "/docs/source/",
+}

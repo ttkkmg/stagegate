@@ -1,6 +1,6 @@
 [project]
 name = "stagegate"
-version = "0.1.0"
+version = "0.2.0"
 description = "A small, explicit scheduler for forward-only pipelines with stage-aware task priority."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,6 +45,7 @@ dev = [
     "pytest>=9.0.2",
     "myst-parser>=4.0.1",
     "sphinx>=8.2.3",
+    "sphinx-rtd-theme>=3.1.0",
 ]
 
 [build-system]

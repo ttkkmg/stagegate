@@ -13,3 +13,6 @@ thread pool, but less machinery than a workflow engine.
   collection, cancellation, cooperative terminate, and long-lived outer loops.
 - **API Reference** provides generated reference documentation for the public
   API.
+
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/ttkkmg/stagegate)
+[![License](https://img.shields.io/github/license/ttkkmg/stagegate)](https://github.com/ttkkmg/stagegate/blob/main/LICENSE)
