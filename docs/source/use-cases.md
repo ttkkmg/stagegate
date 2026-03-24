@@ -5,13 +5,13 @@ combined.
 
 ## 1. Barriered Multi-Stage Pipelines
 
-The most basic `stagegate` pipeline has clear phase boundaries:
+This is the baseline `stagegate` pattern:
 
-- launch a set of sibling tasks
-- wait until that phase is complete
-- read the outputs
-- advance the stage
-- launch the next phase
+1. launch a wave of sibling tasks
+2. wait for the whole phase
+3. read results
+4. call `stage_forward()`
+5. launch the next phase
 
 ```python
 class RNASeqPipeline(stagegate.Pipeline):
@@ -59,16 +59,39 @@ class RNASeqPipeline(stagegate.Pipeline):
             args=(trimmed_r1, trimmed_r2),
         ).run()
         return align.result()
+
+
+def main(sample_ids: list[str]) -> list[str]:
+    scheduler = stagegate.Scheduler(
+        resources={"cpu": 32, "mem": 128},
+        pipeline_parallelism=4,
+        task_parallelism=8,
+    )
+    try:
+        handles = {
+            scheduler.run_pipeline(RNASeqPipeline(sample_id))
+            for sample_id in sample_ids
+        }
+        done, pending = scheduler.wait_pipelines(
+            handles,
+            return_when=stagegate.ALL_COMPLETED,
+        )
+        assert not pending
+        return [handle.result() for handle in done]
+    finally:
+        scheduler.close()
 ```
 
-Use this pattern when a pipeline is naturally forward-only and each phase has a
-real barrier. This is the basic model for `stagegate`.
+Use this pattern when:
+
+- each sample is naturally one pipeline
+- each phase has a real barrier
+- later-stage work should be favored so partially processed samples finish
 
 ## 2. Incremental Collection with `FIRST_COMPLETED`
 
-Some pipelines do not need every sibling task to finish before they can make a
-decision. In that case, keep a `pending` set and repeatedly wait for the next
-arrival.
+Use this when sibling tasks behave more like a stream of arrivals than like a
+strict batch barrier.
 
 ```python
 class MultiStartPipeline(stagegate.Pipeline):
@@ -105,16 +128,31 @@ class MultiStartPipeline(stagegate.Pipeline):
             args=(accepted,),
         ).run()
         return summary.result()
+
+
+def main(starts_per_pipeline) -> None:
+    with stagegate.Scheduler(
+        resources={"cpu": 32},
+        pipeline_parallelism=4,
+        task_parallelism=8,
+    ) as scheduler:
+        handles = {
+            scheduler.run_pipeline(MultiStartPipeline(starts))
+            for starts in starts_per_pipeline
+        }
+        ...
 ```
 
-This is the intended pattern when sibling tasks behave more like a stream of
-arrivals than like a strict batch barrier.
+Use this pattern when:
+
+- many sibling tasks are launched together
+- progress is observed incrementally through handles
+- domain-level soft failure can remain a normal return value
 
 ## 3. Pruning Queued Work with `cancel()`
 
-If a pipeline has already collected enough useful results, it may want to stop
-the queued tail without touching already running work. That is exactly what
-`cancel()` is for.
+This pattern is for cases where the main savings come from preventing more work
+from starting, without trying to stop already running tasks.
 
 ```python
 class ExperimentPipeline(stagegate.Pipeline):
@@ -153,23 +191,31 @@ class ExperimentPipeline(stagegate.Pipeline):
             args=(selected,),
         ).run()
         return package.result()
+
+
+def main(config_groups) -> None:
+    with stagegate.Scheduler(
+        resources={"cpu": 64, "mem": 256},
+        pipeline_parallelism=4,
+        task_parallelism=8,
+    ) as scheduler:
+        handles = {
+            scheduler.run_pipeline(ExperimentPipeline(configs))
+            for configs in config_groups
+        }
+        ...
 ```
 
-This is best when the main savings come from preventing more work from starting.
-It preserves the simple scheduler rule that already running tasks keep draining.
+Use this pattern when:
+
+- the pipeline can stop queued tail work once enough good results exist
+- cancellation should remain explicitly non-preemptive
+- later packaging work can proceed without adding more low-value starts
 
 ## 4. Terminating Running Siblings from a Python Loop
 
 When queued-task cancellation is not enough, the next pattern is cooperative
-terminate.
-
-The intended control loop is:
-
-1. collect enough successful sibling results
-2. call `request_terminate()` on the remaining handles
-3. wait for termination-related exceptions
-4. run domain cleanup
-5. call `stage_forward()`
+terminate from a Python-controlled loop.
 
 ```python
 class SearchPipeline(stagegate.Pipeline):
@@ -178,7 +224,7 @@ class SearchPipeline(stagegate.Pipeline):
 
     def run(self):
         pending = {
-            self.task(run_candidate, resources={"cpu": 1}, args=(x0,)).run()
+            self.task(self.run_candidate, resources={"cpu": 1}, args=(x0,)).run()
             for x0 in self.starts
         }
         accepted = []
@@ -210,17 +256,38 @@ class SearchPipeline(stagegate.Pipeline):
         self.stage_forward()
         return summarize(accepted)
 
+    def run_candidate(self, x0):
+        state = initialize_candidate(x0)
+        for _ in range(10_000):
+            state = numpy_step(state)
+            if stagegate.terminate_requested():
+                raise stagegate.TerminatedError(
+                    argv=(),
+                    pid=None,
+                    returncode=None,
+                    forced_kill=False,
+                )
+        return state
 
-def run_candidate(x0):
-    state = initialize_candidate(x0)
-    for _ in range(10_000):
-        state = numpy_step(state)
-        stagegate.raise_if_termination_requested()
-    return state
+
+def main(search_batches) -> None:
+    with stagegate.Scheduler(
+        resources={"cpu": 32},
+        pipeline_parallelism=4,
+        task_parallelism=8,
+    ) as scheduler:
+        handles = {
+            scheduler.run_pipeline(SearchPipeline(starts))
+            for starts in search_batches
+        }
+        ...
 ```
 
-This is the pattern when the task owns its loop structure and can define
-safe polling checkpoints.
+Use this pattern when:
+
+- the task owns its loop structure and can define explicit polling checkpoints
+- terminate remains cooperative and observable through handles
+- `FIRST_EXCEPTION` can observe terminated siblings before the next stage
 
 ## 5. Terminating External Processes with `run_subprocess(...)`
 
@@ -272,15 +339,31 @@ class CliSearchPipeline(stagegate.Pipeline):
 
         self.stage_forward()
         return finalize_winner(winner)
+
+
+def main(argv_batches) -> None:
+    with stagegate.Scheduler(
+        resources={"cpu": 32},
+        pipeline_parallelism=4,
+        task_parallelism=8,
+    ) as scheduler:
+        handles = {
+            scheduler.run_pipeline(CliSearchPipeline(argv_groups))
+            for argv_groups in argv_batches
+        }
+        ...
 ```
 
-Use this pattern when the main workload is a long-running external executable.
-`run_subprocess(...)` gives `stagegate` a well-defined way to react to
-terminate requests by sending `SIGTERM` and, if needed, `SIGKILL`.
+Use this pattern when:
+
+- child processes are launched with explicit `argv`
+- terminate requests have a defined subprocess-aware path
+- the pipeline can wait for terminated siblings, clean up partial files, and continue
 
 ## 6. Coordinating Many Pipelines with `wait_pipelines(...)`
 
-Inside a pipeline, use `Pipeline.wait(...)`. Outside pipelines, use
+This is the standard outer control loop at the application boundary. Inside
+`Pipeline.run()`, use `Pipeline.wait(...)`. Outside pipelines, use
 `Scheduler.wait_pipelines(...)`.
 
 ```python
@@ -306,8 +389,11 @@ finally:
     scheduler.close()
 ```
 
-This is the standard outer control loop for applications that keep one
-scheduler alive and feed it many pipeline instances.
+Use this pattern when:
+
+- one scheduler can coordinate many pipeline instances
+- the outer loop can consume results incrementally
+- ownership stays explicit because pipeline handles never mix with task handles
 
 ## 7. Releasing Pipeline Handles with `discard()`
 
@@ -343,17 +429,211 @@ finally:
     scheduler.close()
 ```
 
-This pattern is especially useful when the outer loop may submit thousands of
-pipelines over time and the handle is no longer needed after the result has been
-recorded.
+Use this pattern when:
 
-## Choosing a Pattern
+- the script may submit thousands of pipelines over time
+- completed handle outcome data can be released explicitly after recording
+- separately held child task handles remain unaffected
 
-- use `ALL_COMPLETED` when phases have hard barriers
-- use `FIRST_COMPLETED` when sibling results can be consumed incrementally
-- use `cancel()` when it is enough to stop work that has not started yet
-- use `request_terminate()` when running sibling tasks must also be told to stop
-- use `run_subprocess(...)` when task work is mostly external CLI execution
-- use `wait_pipelines(...)` at the application boundary
-- use `discard()` when a long-lived outer loop should not keep completed
-  pipeline handles around
+## 8. Scheduler Inspection
+
+Snapshots are useful for lightweight operational inspection without exposing
+mutable internal records.
+
+```python
+def main(sample_ids) -> None:
+    with stagegate.Scheduler(
+        resources={"cpu": 32, "mem": 128},
+        pipeline_parallelism=4,
+        task_parallelism=8,
+    ) as scheduler:
+        pending = {
+            scheduler.run_pipeline(RNASeqPipeline(sample_id))
+            for sample_id in sample_ids
+        }
+
+        while pending:
+            view = scheduler.snapshot()
+            print(
+                "running pipelines:",
+                view.pipelines.running,
+                "admitted tasks:",
+                view.tasks.admitted,
+                "resources:",
+                [(r.label, r.in_use, r.capacity) for r in view.resources],
+            )
+
+            done, pending = scheduler.wait_pipelines(
+                pending,
+                timeout=10.0,
+                return_when=stagegate.FIRST_COMPLETED,
+            )
+            for handle in done:
+                consume_result(handle.result())
+```
+
+Use this pattern when:
+
+- monitoring should happen while pipelines are still running
+- aggregate scheduler pressure should be visible without exposing mutable records
+- snapshots are useful for debugging, progress reporting, and tests
+
+## 9. Anti-Patterns and Common Mistakes
+
+These examples show mistakes that are easy to make when you first start writing
+pipelines.
+
+### 9.1 Prohibited: calling pipeline control APIs from task worker code
+
+Task functions are not allowed to behave like mini coordinators.
+
+```python
+class BadPipeline(stagegate.Pipeline):
+    def run(self):
+        first = self.task(self.worker, resources={"cpu": 1}).run()
+        return first.result()
+
+    def worker(self):
+        child = self.task(do_more_work, resources={"cpu": 1}).run()
+        self.wait([child], return_when=stagegate.ALL_COMPLETED)
+        return child.result()
+```
+
+Why this is wrong:
+
+- task worker threads are not part of the pipeline control plane
+- `Pipeline.task(...)`, `Pipeline.wait(...)`, and `stage_forward()` are valid
+  only on the scheduler-owned coordinator thread that is running `Pipeline.run()`
+
+Do this instead:
+
+- keep task submission and waiting in `Pipeline.run()` or helper methods called
+  from that coordinator-thread context
+- keep task functions focused on performing work only
+
+### 9.2 Anti-pattern: passing a scheduler into a task and launching pipelines from it
+
+Tasks should not become hidden pipeline launchers.
+
+```python
+def worker(scheduler, sample_id):
+    handle = scheduler.run_pipeline(SamplePipeline(sample_id))
+    return handle.result()
+
+
+class BadPipeline(stagegate.Pipeline):
+    def run(self):
+        task_handle = self.task(
+            worker,
+            resources={"cpu": 1},
+            args=(self._stagegate_scheduler, "S1"),
+        ).run()
+        return task_handle.result()
+```
+
+Why this is a problem:
+
+- it collapses the distinction between outer application control and task work
+- ownership and shutdown responsibilities become harder to reason about
+- even if it appears to work, it pushes orchestration into worker code and
+  makes debugging much harder
+
+Do this instead:
+
+- submit pipelines from the outer application boundary
+- use `Scheduler.wait_pipelines(...)` there
+- keep tasks as work units, not as pipeline launchers
+
+### 9.3 Prohibited: reusing the same pipeline instance for multiple submissions
+
+```python
+pipeline = SamplePipeline("S1")
+
+handle1 = scheduler.run_pipeline(pipeline)
+handle1.result()
+
+handle2 = scheduler.run_pipeline(pipeline)
+```
+
+Why this is wrong:
+
+- a `Pipeline` instance is single-use for submission
+- the same instance must not be submitted again, even if the earlier
+  submission was cancelled
+
+Do this instead:
+
+```python
+handle1 = scheduler.run_pipeline(SamplePipeline("S1"))
+handle2 = scheduler.run_pipeline(SamplePipeline("S1"))
+```
+
+### 9.4 Common mistake: expecting `cancel()` to stop already running tasks
+
+```python
+for handle in pending:
+    handle.cancel()
+```
+
+Why this is a mistake:
+
+- `TaskHandle.cancel()` only cancels tasks that have not started yet
+- queued or ready tasks may be cancelled
+- running tasks are never force-stopped by `cancel()`
+
+Do this instead:
+
+- use `cancel()` when the goal is to prune queued tail work
+- if running siblings must also stop, switch to `request_terminate()` and a
+  terminate-aware task body
+
+### 9.5 Common mistake: expecting `request_terminate()` to force-stop arbitrary Python code
+
+```python
+def long_running_task():
+    for item in huge_input:
+        process(item)
+
+
+class SearchPipeline(stagegate.Pipeline):
+    def run(self):
+        handle = self.task(long_running_task, resources={"cpu": 1}).run()
+        handle.request_terminate()
+        return handle.result()
+```
+
+Why this is a mistake:
+
+- `request_terminate()` is cooperative, not a strong preemption mechanism
+- Python task code must poll `stagegate.terminate_requested()` at explicit safe
+  points
+
+Do this instead:
+
+- insert explicit termination checkpoints in Python loops
+- use `stagegate.run_subprocess(...)` for long-running external commands
+
+### 9.6 Prohibited: mixing up `Pipeline.wait(...)` and `Scheduler.wait_pipelines(...)`
+
+```python
+class BadPipeline(stagegate.Pipeline):
+    def run(self):
+        pipeline_handle = self._stagegate_scheduler.run_pipeline(OtherPipeline())
+        self.wait([pipeline_handle], return_when=stagegate.ALL_COMPLETED)
+```
+
+```python
+task_handle = pipeline.task(run_step, resources={"cpu": 1}).run()
+scheduler.wait_pipelines([task_handle], return_when=stagegate.ALL_COMPLETED)
+```
+
+Why this is wrong:
+
+- `Pipeline.wait(...)` is for task handles created by that pipeline
+- `Scheduler.wait_pipelines(...)` is for pipeline handles created by that scheduler
+- task handles and pipeline handles must never be mixed
+
+Do this instead:
+
+- inside a pipeline, wait on task handles with `Pipeline.wait(...)`
+- outside pipelines, wait on pipeline handles with `Scheduler.wait_pipelines(...)`
