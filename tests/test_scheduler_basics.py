@@ -55,6 +55,30 @@ def test_shutdown_only_starts_shutdown() -> None:
     assert scheduler.closed() is False
 
 
+def test_pipeline_submission_and_cancel_update_scheduler_queued_pipeline_counter() -> (
+    None
+):
+    scheduler = stagegate.Scheduler(resources={"cpu": 2})
+    scheduler._ensure_pipeline_runtime_started_locked = lambda: None  # type: ignore[method-assign]
+
+    first = scheduler.run_pipeline(stagegate.Pipeline())
+    second = scheduler.run_pipeline(stagegate.Pipeline())
+
+    with scheduler._condition:
+        assert scheduler._runtime.queued_pipeline_count == 2
+        assert scheduler._runtime.running_pipeline_count == 0
+
+    assert first.cancel() is True
+    with scheduler._condition:
+        assert scheduler._runtime.queued_pipeline_count == 1
+        assert scheduler._runtime.running_pipeline_count == 0
+
+    assert second.cancel() is True
+    with scheduler._condition:
+        assert scheduler._runtime.queued_pipeline_count == 0
+        assert scheduler._runtime.running_pipeline_count == 0
+
+
 def test_close_closes_empty_scheduler() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2})
 

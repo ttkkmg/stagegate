@@ -160,6 +160,25 @@ def test_pipeline_parallelism_one_starts_pipelines_in_fifo_order() -> None:
     assert order == ["first", "second"]
 
 
+def test_running_pipeline_updates_scheduler_running_pipeline_counter() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, pipeline_parallelism=1)
+    pipeline = BlockingPipeline("first", [])
+
+    handle = scheduler.run_pipeline(pipeline)
+
+    assert pipeline.started.wait(timeout=1.0) is True
+    with scheduler._condition:
+        assert scheduler._runtime.queued_pipeline_count == 0
+        assert scheduler._runtime.running_pipeline_count == 1
+
+    pipeline.release.set()
+    assert handle.result(timeout=1.0) == "first"
+
+    with scheduler._condition:
+        assert scheduler._runtime.queued_pipeline_count == 0
+        assert scheduler._runtime.running_pipeline_count == 0
+
+
 def test_cancelled_queued_pipeline_is_skipped_by_coordinator() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, pipeline_parallelism=1)
     order: list[str] = []

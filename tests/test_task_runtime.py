@@ -70,8 +70,25 @@ def make_queued_task_record(
     )
     add_task_to_live_registry(pipeline_record, record)
     scheduler._runtime.task_records[task_id] = record
+    scheduler._runtime.queued_task_count += 1
     heapq.heappush(scheduler._runtime.task_queue, TaskQueueEntry.from_record(record))
     return record
+
+
+class BlockingChildTaskPipeline(stagegate.Pipeline):
+    def __init__(self) -> None:
+        self.task_started = threading.Event()
+        self.task_release = threading.Event()
+        self.task_handle: stagegate.TaskHandle | None = None
+
+    def run(self) -> str:
+        def child() -> str:
+            self.task_started.set()
+            self.task_release.wait(timeout=1.0)
+            return "task-done"
+
+        self.task_handle = self.task(child, resources={"cpu": 1}).run()
+        return "pipeline-done"
 
 
 def test_task_parallelism_none_defaults_to_one_worker() -> None:
@@ -192,13 +209,16 @@ def test_dispatch_once_moves_task_to_ready_and_reserves_resources() -> None:
             pipeline_local_task_seq=1,
             global_task_submit_seq=1,
         )
+        scheduler._runtime.running_task_count = 0
 
         changed = scheduler._dispatch_one_task_locked()
 
         assert changed is True
         assert record.state is TaskState.READY
         assert record.ready_seq == 1
+        assert scheduler._runtime.queued_task_count == 0
         assert scheduler._runtime.admitted_task_count == 1
+        assert scheduler._runtime.running_task_count == 0
         assert scheduler._runtime.resources_in_use["cpu"] == 2
         assert scheduler._runtime.ready_queue[0].record is record
 
@@ -328,6 +348,27 @@ def test_worker_executes_task_and_releases_resources() -> None:
         assert scheduler._runtime.admitted_task_count == 0
 
 
+def test_worker_updates_scheduler_running_task_counter_during_execution() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    pipeline = BlockingChildTaskPipeline()
+    pipeline_handle = scheduler.run_pipeline(pipeline)
+
+    assert pipeline.task_started.wait(timeout=1.0) is True
+    assert pipeline.task_handle is not None
+
+    with scheduler._condition:
+        assert scheduler._runtime.admitted_task_count == 1
+        assert scheduler._runtime.running_task_count == 1
+
+    pipeline.task_release.set()
+    assert pipeline.task_handle.result(timeout=1.0) == "task-done"
+    assert pipeline_handle.result(timeout=1.0) == "pipeline-done"
+
+    with scheduler._condition:
+        assert scheduler._runtime.admitted_task_count == 0
+        assert scheduler._runtime.running_task_count == 0
+
+
 def test_ready_cancel_releases_resources_and_worker_skips_stale_entry() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
     _, pipeline_record = bind_running_pipeline(scheduler)
@@ -345,18 +386,45 @@ def test_ready_cancel_releases_resources_and_worker_skips_stale_entry() -> None:
         scheduler._runtime.task_records[record.task_id] = record
         add_task_to_live_registry(pipeline_record, record)
         scheduler._runtime.ready_queue.append(ReadyQueueEntry(1, record))
+        scheduler._runtime.queued_task_count = 0
         scheduler._runtime.admitted_task_count = 1
+        scheduler._runtime.running_task_count = 0
         scheduler._reserve_resources_locked({"cpu": 1})
 
     handle = stagegate.TaskHandle(record)
     assert handle.cancel() is True
     with scheduler._condition:
+        assert scheduler._runtime.queued_task_count == 0
         assert scheduler._runtime.resources_in_use["cpu"] == 0
         assert scheduler._runtime.admitted_task_count == 0
+        assert scheduler._runtime.running_task_count == 0
         assert record.ready_seq is None
         assert record.task_id not in scheduler._runtime.task_records
         assert record not in pipeline_record.task_records
         assert scheduler._pop_next_ready_task_locked() is None
+
+
+def test_finalize_task_from_queued_updates_scheduler_live_task_counters() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    _, pipeline_record = bind_running_pipeline(scheduler)
+
+    with scheduler._condition:
+        record = make_queued_task_record(
+            scheduler,
+            pipeline_record=pipeline_record,
+            task_id=1,
+            cpu=1,
+            stage_snapshot=0,
+            pipeline_local_task_seq=1,
+            global_task_submit_seq=1,
+        )
+        scheduler._runtime.running_task_count = 0
+
+        scheduler._finalize_task_terminal_locked(record, state=TaskState.CANCELLED)
+
+        assert scheduler._runtime.queued_task_count == 0
+        assert scheduler._runtime.admitted_task_count == 0
+        assert scheduler._runtime.running_task_count == 0
 
 
 def test_cancel_vs_start_is_linearized_for_ready_task() -> None:

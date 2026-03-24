@@ -152,10 +152,14 @@ class SchedulerRuntime:
     state: SchedulerState = SchedulerState.OPEN
     next_pipeline_id: int = 0
     next_pipeline_enqueue_seq: int = 0
+    queued_pipeline_count: int = 0
+    running_pipeline_count: int = 0
     next_task_id: int = 0
     next_global_task_submit_seq: int = 0
     next_ready_seq: int = 0
+    queued_task_count: int = 0
     admitted_task_count: int = 0
+    running_task_count: int = 0
     succeeded_pipeline_count: int = 0
     failed_pipeline_count: int = 0
     cancelled_pipeline_count: int = 0
@@ -168,4 +172,5 @@ class SchedulerRuntime:
     ready_queue: deque[ReadyQueueEntry] = field(default_factory=deque)
     resources_in_use: dict[str, int | float] = field(default_factory=dict)
     pipeline_records: dict[int, PipelineRecord] = field(default_factory=dict)
+    running_pipeline_records: dict[int, PipelineRecord] = field(default_factory=dict)
     task_records: dict[int, TaskRecord] = field(default_factory=dict)

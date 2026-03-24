@@ -124,51 +124,32 @@ class Scheduler:
             SchedulerSnapshot: Detached aggregate view of scheduler state,
                 counts, and resources.
         """
+        running_pipeline_entries: tuple[tuple[int, str | None], ...] = ()
         with self._condition:
-            queued_pipelines = sum(
-                1
-                for record in self._runtime.pipeline_records.values()
-                if record.state is PipelineState.QUEUED
-            )
-            running_pipelines = sum(
-                1
-                for record in self._runtime.pipeline_records.values()
-                if record.state is PipelineState.RUNNING
-            )
             pipeline_counts = PipelineCountsSnapshot(
-                queued=queued_pipelines,
-                running=running_pipelines,
+                queued=self._runtime.queued_pipeline_count,
+                running=self._runtime.running_pipeline_count,
                 succeeded=self._runtime.succeeded_pipeline_count,
                 failed=self._runtime.failed_pipeline_count,
                 cancelled=self._runtime.cancelled_pipeline_count,
                 total=(
-                    queued_pipelines
-                    + running_pipelines
+                    self._runtime.queued_pipeline_count
+                    + self._runtime.running_pipeline_count
                     + self._runtime.succeeded_pipeline_count
                     + self._runtime.failed_pipeline_count
                     + self._runtime.cancelled_pipeline_count
                 ),
             )
-            queued_tasks = sum(
-                1
-                for record in self._runtime.task_records.values()
-                if record.state is TaskState.QUEUED
-            )
-            running_tasks = sum(
-                1
-                for record in self._runtime.task_records.values()
-                if record.state is TaskState.RUNNING
-            )
             task_counts = TaskCountsSnapshot(
-                queued=queued_tasks,
+                queued=self._runtime.queued_task_count,
                 admitted=self._runtime.admitted_task_count,
-                running=running_tasks,
+                running=self._runtime.running_task_count,
                 succeeded=self._runtime.succeeded_task_count,
                 failed=self._runtime.failed_task_count,
                 terminated=self._runtime.terminated_task_count,
                 cancelled=self._runtime.cancelled_task_count,
                 total=(
-                    queued_tasks
+                    self._runtime.queued_task_count
                     + self._runtime.admitted_task_count
                     + self._runtime.succeeded_task_count
                     + self._runtime.failed_task_count
@@ -186,32 +167,30 @@ class Scheduler:
                 )
                 for label in sorted(self._resources)
             )
-            running_pipeline_summaries: tuple[RunningPipelineSummary, ...] = ()
             if include_running_pipelines:
-                running_pipeline_summaries = tuple(
-                    RunningPipelineSummary(
-                        pipeline_id=record.pipeline_id,
-                        name=record.name,
-                    )
-                    for record in sorted(
-                        (
-                            record
-                            for record in self._runtime.pipeline_records.values()
-                            if record.state is PipelineState.RUNNING
-                        ),
-                        key=lambda record: record.pipeline_id,
-                    )
+                running_pipeline_entries = tuple(
+                    (record.pipeline_id, record.name)
+                    for record in self._runtime.running_pipeline_records.values()
                 )
-            return SchedulerSnapshot(
-                shutdown_started=self._runtime.state is not SchedulerState.OPEN,
-                closed=self._runtime.state is SchedulerState.CLOSED,
-                pipeline_parallelism=self._pipeline_parallelism,
-                task_parallelism=self._effective_task_parallelism,
-                pipelines=pipeline_counts,
-                tasks=task_counts,
-                resources=resources,
-                running_pipelines=running_pipeline_summaries,
+            shutdown_started = self._runtime.state is not SchedulerState.OPEN
+            closed = self._runtime.state is SchedulerState.CLOSED
+
+        running_pipeline_summaries: tuple[RunningPipelineSummary, ...] = ()
+        if include_running_pipelines:
+            running_pipeline_summaries = tuple(
+                RunningPipelineSummary(pipeline_id=pipeline_id, name=name)
+                for pipeline_id, name in sorted(running_pipeline_entries)
             )
+        return SchedulerSnapshot(
+            shutdown_started=shutdown_started,
+            closed=closed,
+            pipeline_parallelism=self._pipeline_parallelism,
+            task_parallelism=self._effective_task_parallelism,
+            pipelines=pipeline_counts,
+            tasks=task_counts,
+            resources=resources,
+            running_pipelines=running_pipeline_summaries,
+        )
 
     def run_pipeline(
         self, pipeline: Pipeline, *, name: str | None = None
@@ -254,6 +233,7 @@ class Scheduler:
                 enqueue_seq=self._runtime.next_pipeline_enqueue_seq,
                 name=name,
             )
+            self._runtime.queued_pipeline_count += 1
             self._runtime.pipeline_records[record.pipeline_id] = record
             self._runtime.pipeline_queue.append(
                 PipelineQueueEntry(enqueue_seq=record.enqueue_seq, record=record)
@@ -496,6 +476,7 @@ class Scheduler:
             state=TaskState.QUEUED,
         )
         self._runtime.task_records[record.task_id] = record
+        self._runtime.queued_task_count += 1
         pipeline_record.task_records.add(record)
         pipeline_record.queued_task_count += 1
         pipeline_record.total_task_count += 1
@@ -599,6 +580,7 @@ class Scheduler:
         record = self._pop_top_live_task_locked()
         assert record is not None
         self._reserve_resources_locked(record.resources_required)
+        self._runtime.queued_task_count -= 1
         self._runtime.admitted_task_count += 1
         self._runtime.next_ready_seq += 1
         record.pipeline_record.queued_task_count -= 1
@@ -622,10 +604,12 @@ class Scheduler:
         pipeline_record = record.pipeline_record
 
         if previous_state is TaskState.QUEUED:
+            self._runtime.queued_task_count -= 1
             pipeline_record.queued_task_count -= 1
         elif previous_state is TaskState.READY:
             pipeline_record.admitted_task_count -= 1
         elif previous_state is TaskState.RUNNING:
+            self._runtime.running_task_count -= 1
             pipeline_record.admitted_task_count -= 1
             pipeline_record.running_task_count -= 1
 
@@ -681,6 +665,12 @@ class Scheduler:
         result_value=None,
         exception: BaseException | None = None,
     ) -> None:
+        previous_state = record.state
+        if previous_state is PipelineState.QUEUED:
+            self._runtime.queued_pipeline_count -= 1
+        elif previous_state is PipelineState.RUNNING:
+            self._runtime.running_pipeline_count -= 1
+        self._runtime.running_pipeline_records.pop(record.pipeline_id, None)
         record.state = state
         record.coordinator_thread_ident = None
         if state is PipelineState.SUCCEEDED:
@@ -719,6 +709,7 @@ class Scheduler:
                 if record is None:
                     self._condition.wait()
                     continue
+                self._runtime.running_task_count += 1
                 record.pipeline_record.running_task_count += 1
                 record.state = TaskState.RUNNING
                 record.ready_seq = None
@@ -777,7 +768,10 @@ class Scheduler:
                 if record is None:
                     self._condition.wait()
                     continue
+                self._runtime.queued_pipeline_count -= 1
+                self._runtime.running_pipeline_count += 1
                 record.state = PipelineState.RUNNING
+                self._runtime.running_pipeline_records[record.pipeline_id] = record
                 record.coordinator_thread_ident = coordinator_ident
                 self._condition.notify_all()
 

@@ -150,6 +150,30 @@ def test_pipeline_snapshot_may_show_terminal_pipeline_with_live_child_tasks() ->
     assert terminal_snapshot.tasks.running == 0
 
 
+def test_scheduler_snapshot_reports_running_task_counts_for_live_child_task() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    pipeline = BlockingTaskPipeline()
+    pipeline_handle = scheduler.run_pipeline(pipeline)
+
+    assert pipeline.task_started.wait(timeout=1.0) is True
+    assert pipeline.task_handle is not None
+
+    snapshot = scheduler.snapshot()
+    assert snapshot.tasks.queued == 0
+    assert snapshot.tasks.admitted == 1
+    assert snapshot.tasks.running == 1
+
+    pipeline.task_release.set()
+    assert pipeline.task_handle.result(timeout=1.0) == "child-done"
+    assert pipeline_handle.result(timeout=1.0) == "pipeline-done"
+
+    terminal_snapshot = scheduler.snapshot()
+    assert terminal_snapshot.tasks.queued == 0
+    assert terminal_snapshot.tasks.admitted == 0
+    assert terminal_snapshot.tasks.running == 0
+    assert terminal_snapshot.tasks.succeeded == 1
+
+
 def test_snapshots_remain_usable_after_close() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
     handle = scheduler.run_pipeline(SimpleTaskPipeline())
@@ -190,4 +214,100 @@ def test_scheduler_snapshot_with_running_pipelines_reports_submission_names() ->
     running.release.set()
     assert running_handle.result(timeout=1.0) == "pipeline-done"
     queued.release.set()
+    assert queued_handle.result(timeout=1.0) == "pipeline-done"
+
+
+def test_scheduler_snapshot_with_running_pipelines_orders_summaries_by_pipeline_id() -> (
+    None
+):
+    scheduler = stagegate.Scheduler(resources={"cpu": 4}, pipeline_parallelism=3)
+    first = BlockingPipeline(user_name="first-user-owned")
+    second = BlockingPipeline(user_name="second-user-owned")
+    third = BlockingPipeline(user_name="third-user-owned")
+
+    first_handle = scheduler.run_pipeline(first, name="sample-b")
+    second_handle = scheduler.run_pipeline(second, name="sample-a")
+    third_handle = scheduler.run_pipeline(third, name="sample-c")
+
+    assert first.started.wait(timeout=1.0) is True
+    assert second.started.wait(timeout=1.0) is True
+    assert third.started.wait(timeout=1.0) is True
+
+    snapshot = scheduler.snapshot(include_running_pipelines=True)
+
+    assert snapshot.pipelines.running == 3
+    assert snapshot.running_pipelines == (
+        stagegate.RunningPipelineSummary(
+            pipeline_id=first_handle._record.pipeline_id,
+            name="sample-b",
+        ),
+        stagegate.RunningPipelineSummary(
+            pipeline_id=second_handle._record.pipeline_id,
+            name="sample-a",
+        ),
+        stagegate.RunningPipelineSummary(
+            pipeline_id=third_handle._record.pipeline_id,
+            name="sample-c",
+        ),
+    )
+
+    first.release.set()
+    second.release.set()
+    third.release.set()
+    assert first_handle.result(timeout=1.0) == "pipeline-done"
+    assert second_handle.result(timeout=1.0) == "pipeline-done"
+    assert third_handle.result(timeout=1.0) == "pipeline-done"
+
+
+def test_scheduler_snapshot_with_running_pipelines_excludes_queued_and_terminal_entries() -> (
+    None
+):
+    scheduler = stagegate.Scheduler(resources={"cpu": 3}, pipeline_parallelism=2)
+    first = BlockingPipeline(user_name="first-user-owned")
+    second = BlockingPipeline(user_name="second-user-owned")
+    queued = BlockingPipeline(user_name="queued-user-owned")
+
+    first_handle = scheduler.run_pipeline(first, name="sample-1")
+    second_handle = scheduler.run_pipeline(second, name="sample-2")
+    queued_handle = scheduler.run_pipeline(queued, name="sample-queued")
+
+    assert first.started.wait(timeout=1.0) is True
+    assert second.started.wait(timeout=1.0) is True
+
+    initial_snapshot = scheduler.snapshot(include_running_pipelines=True)
+    assert initial_snapshot.pipelines.queued == 1
+    assert initial_snapshot.pipelines.running == 2
+    assert initial_snapshot.running_pipelines == (
+        stagegate.RunningPipelineSummary(
+            pipeline_id=first_handle._record.pipeline_id,
+            name="sample-1",
+        ),
+        stagegate.RunningPipelineSummary(
+            pipeline_id=second_handle._record.pipeline_id,
+            name="sample-2",
+        ),
+    )
+
+    first.release.set()
+    assert first_handle.result(timeout=1.0) == "pipeline-done"
+    assert queued.started.wait(timeout=1.0) is True
+
+    second_snapshot = scheduler.snapshot(include_running_pipelines=True)
+    assert second_snapshot.pipelines.queued == 0
+    assert second_snapshot.pipelines.running == 2
+    assert second_snapshot.pipelines.succeeded == 1
+    assert second_snapshot.running_pipelines == (
+        stagegate.RunningPipelineSummary(
+            pipeline_id=second_handle._record.pipeline_id,
+            name="sample-2",
+        ),
+        stagegate.RunningPipelineSummary(
+            pipeline_id=queued_handle._record.pipeline_id,
+            name="sample-queued",
+        ),
+    )
+
+    second.release.set()
+    queued.release.set()
+    assert second_handle.result(timeout=1.0) == "pipeline-done"
     assert queued_handle.result(timeout=1.0) == "pipeline-done"
