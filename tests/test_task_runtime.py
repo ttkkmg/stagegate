@@ -450,11 +450,12 @@ def test_task_success_cleanup_scrubs_heavy_execution_inputs() -> None:
         assert record.args == ()
         assert record.kwargs == {}
         assert record.resources_required == {}
-        assert record.name is None
+        assert record.name == "sample-task"
         assert record.stage_snapshot == 0
         assert record.pipeline_enqueue_seq == 0
         assert record.pipeline_local_task_seq == 0
         assert record.global_task_submit_seq == 0
+    assert handle.name() == "sample-task"
 
 
 def test_task_failure_cleanup_removes_task_from_live_registries() -> None:

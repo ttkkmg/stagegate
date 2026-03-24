@@ -145,6 +145,15 @@ def test_task_handle_request_terminate_running_task_is_harmless_when_repeated() 
     assert getattr(record, "termination_requested") is True
 
 
+def test_task_handle_name_returns_submitted_name_or_none() -> None:
+    named = make_task_record()
+    named.name = "task-1"
+    unnamed = make_task_record()
+
+    assert stagegate.TaskHandle(named).name() == "task-1"
+    assert stagegate.TaskHandle(unnamed).name() is None
+
+
 @pytest.mark.parametrize(
     "state",
     [TaskState.RUNNING, TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED],
@@ -287,6 +296,7 @@ def test_pipeline_handle_discard_invalidates_observation_methods_and_clears_resu
     assert record.result_value is None
     assert record.exception is None
     for method_name in (
+        "name",
         "done",
         "running",
         "cancelled",
@@ -310,6 +320,8 @@ def test_pipeline_handle_discard_invalidates_failure_handle_and_clears_exception
     assert record.pipeline is None
     assert record.result_value is None
     assert record.exception is None
+    with pytest.raises(stagegate.DiscardedHandleError):
+        handle.name()
     with pytest.raises(stagegate.DiscardedHandleError):
         handle.result()
     with pytest.raises(stagegate.DiscardedHandleError):

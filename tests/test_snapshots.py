@@ -28,6 +28,18 @@ class SimpleTaskPipeline(stagegate.Pipeline):
         return "pipeline-done"
 
 
+class BlockingPipeline(stagegate.Pipeline):
+    def __init__(self, user_name: str) -> None:
+        self.name = user_name
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def run(self) -> str:
+        self.started.set()
+        self.release.wait(timeout=1.0)
+        return "pipeline-done"
+
+
 def test_scheduler_snapshot_on_new_scheduler_is_empty() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2, "mem": 4}, task_parallelism=3)
 
@@ -64,6 +76,16 @@ def test_scheduler_snapshot_on_new_scheduler_without_resources_has_empty_resourc
     assert snapshot.resources == ()
 
 
+def test_scheduler_snapshot_without_opt_in_exposes_no_running_pipeline_summaries() -> (
+    None
+):
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+
+    snapshot = scheduler.snapshot()
+
+    assert snapshot.running_pipelines == ()
+
+
 def test_scheduler_snapshot_tracks_terminal_pipeline_and_task_totals() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
 
@@ -84,12 +106,13 @@ def test_scheduler_snapshot_tracks_terminal_pipeline_and_task_totals() -> None:
 def test_pipeline_handle_snapshot_reports_terminal_pipeline_counts() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
 
-    handle = scheduler.run_pipeline(SimpleTaskPipeline())
+    handle = scheduler.run_pipeline(SimpleTaskPipeline(), name="sample-1")
 
     assert handle.result(timeout=1.0) == "pipeline-done"
     snapshot = handle.snapshot()
 
     assert snapshot.pipeline_id == handle._record.pipeline_id
+    assert snapshot.name == "sample-1"
     assert snapshot.state == "succeeded"
     assert snapshot.stage_index == 0
     assert snapshot.tasks.queued == 0
@@ -143,3 +166,28 @@ def test_snapshots_remain_usable_after_close() -> None:
     assert scheduler_snapshot.tasks.succeeded == 1
     assert pipeline_snapshot.state == "succeeded"
     assert pipeline_snapshot.tasks.succeeded == 1
+
+
+def test_scheduler_snapshot_with_running_pipelines_reports_submission_names() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, pipeline_parallelism=1)
+    running = BlockingPipeline(user_name="user-owned")
+    queued = BlockingPipeline(user_name="other-user-owned")
+
+    running_handle = scheduler.run_pipeline(running, name="submitted-running")
+    queued_handle = scheduler.run_pipeline(queued, name="submitted-queued")
+
+    assert running.started.wait(timeout=1.0) is True
+
+    snapshot = scheduler.snapshot(include_running_pipelines=True)
+
+    assert snapshot.running_pipelines == (
+        stagegate.RunningPipelineSummary(
+            pipeline_id=running_handle._record.pipeline_id,
+            name="submitted-running",
+        ),
+    )
+
+    running.release.set()
+    assert running_handle.result(timeout=1.0) == "pipeline-done"
+    queued.release.set()
+    assert queued_handle.result(timeout=1.0) == "pipeline-done"

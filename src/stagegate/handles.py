@@ -74,6 +74,12 @@ class TaskHandle:
         with scheduler._condition:
             return scheduler._cancel_task_if_possible_locked(self._record)
 
+    def name(self) -> str | None:
+        """Return the user-facing task name, if one was supplied."""
+        scheduler = self._record.scheduler
+        with scheduler._condition:
+            return self._record.name
+
     def request_terminate(self) -> bool:
         """Request cooperative termination for this task.
 
@@ -236,6 +242,17 @@ class PipelineHandle:
                 return True
             return False
 
+    def name(self) -> str | None:
+        """Return the submission-time pipeline name, if one was supplied.
+
+        Raises:
+            DiscardedHandleError: If the handle was discarded.
+        """
+        scheduler = self._record.scheduler
+        with scheduler._condition:
+            self._ensure_not_discarded_locked()
+            return self._record.name
+
     def discard(self) -> None:
         """Discard this handle and release retained terminal outcome data.
 
@@ -256,6 +273,7 @@ class PipelineHandle:
             self._record.pipeline = None
             self._record.result_value = None
             self._record.exception = None
+            self._record.name = None
             self._record.coordinator_thread_ident = None
 
     def _ensure_not_discarded_locked(self) -> None:
@@ -404,6 +422,7 @@ class PipelineHandle:
             )
             return PipelineSnapshot(
                 pipeline_id=self._record.pipeline_id,
+                name=self._record.name,
                 state=pipeline_state_to_public_name(self._record.state),
                 stage_index=self._record.stage_index,
                 tasks=tasks,

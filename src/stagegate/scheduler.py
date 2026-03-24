@@ -23,6 +23,7 @@ from .pipeline import Pipeline
 from .snapshots import (
     PipelineCountsSnapshot,
     ResourceSnapshot,
+    RunningPipelineSummary,
     SchedulerSnapshot,
     TaskCountsSnapshot,
 )
@@ -116,7 +117,7 @@ class Scheduler:
         with self._condition:
             return self._runtime.state is SchedulerState.CLOSED
 
-    def snapshot(self) -> SchedulerSnapshot:
+    def snapshot(self, *, include_running_pipelines: bool = False) -> SchedulerSnapshot:
         """Return an immutable point-in-time snapshot of scheduler state.
 
         Returns:
@@ -185,6 +186,22 @@ class Scheduler:
                 )
                 for label in sorted(self._resources)
             )
+            running_pipeline_summaries: tuple[RunningPipelineSummary, ...] = ()
+            if include_running_pipelines:
+                running_pipeline_summaries = tuple(
+                    RunningPipelineSummary(
+                        pipeline_id=record.pipeline_id,
+                        name=record.name,
+                    )
+                    for record in sorted(
+                        (
+                            record
+                            for record in self._runtime.pipeline_records.values()
+                            if record.state is PipelineState.RUNNING
+                        ),
+                        key=lambda record: record.pipeline_id,
+                    )
+                )
             return SchedulerSnapshot(
                 shutdown_started=self._runtime.state is not SchedulerState.OPEN,
                 closed=self._runtime.state is SchedulerState.CLOSED,
@@ -193,13 +210,17 @@ class Scheduler:
                 pipelines=pipeline_counts,
                 tasks=task_counts,
                 resources=resources,
+                running_pipelines=running_pipeline_summaries,
             )
 
-    def run_pipeline(self, pipeline: Pipeline) -> PipelineHandle:
+    def run_pipeline(
+        self, pipeline: Pipeline, *, name: str | None = None
+    ) -> PipelineHandle:
         """Submit a pipeline instance for FIFO execution and return its handle.
 
         Args:
             pipeline: Pipeline instance to enqueue.
+            name: Optional submission-time monitoring label.
 
         Returns:
             PipelineHandle: Handle for observing the submitted pipeline.
@@ -211,6 +232,8 @@ class Scheduler:
         """
         if not isinstance(pipeline, Pipeline):
             raise TypeError("pipeline must be a Pipeline instance")
+        if name is not None and not isinstance(name, str):
+            raise TypeError("name must be None or a string")
 
         with self._condition:
             if self._runtime.state is not SchedulerState.OPEN:
@@ -229,6 +252,7 @@ class Scheduler:
                 pipeline=pipeline,
                 pipeline_id=self._runtime.next_pipeline_id,
                 enqueue_seq=self._runtime.next_pipeline_enqueue_seq,
+                name=name,
             )
             self._runtime.pipeline_records[record.pipeline_id] = record
             self._runtime.pipeline_queue.append(
@@ -644,7 +668,6 @@ class Scheduler:
         record.resources_required = {}
         record.args = ()
         record.kwargs = {}
-        record.name = None
         record.stage_snapshot = 0
         record.pipeline_enqueue_seq = 0
         record.pipeline_local_task_seq = 0

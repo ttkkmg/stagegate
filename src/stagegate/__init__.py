@@ -15,6 +15,7 @@ from .snapshots import (
     PipelineCountsSnapshot,
     PipelineSnapshot,
     ResourceSnapshot,
+    RunningPipelineSummary,
     SchedulerSnapshot,
     TaskCountsSnapshot,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "terminate_requested",
     "run_subprocess",
     "ResourceSnapshot",
+    "RunningPipelineSummary",
     "TaskCountsSnapshot",
     "PipelineCountsSnapshot",
     "SchedulerSnapshot",

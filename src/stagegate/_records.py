@@ -81,6 +81,7 @@ class PipelineRecord:
     pipeline: Pipeline | None
     pipeline_id: int
     enqueue_seq: int
+    name: str | None = None
     state: PipelineState = PipelineState.QUEUED
     stage_index: int = 0
     next_task_seq: int = 0

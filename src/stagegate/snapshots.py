@@ -71,6 +71,19 @@ class PipelineCountsSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RunningPipelineSummary:
+    """Immutable scheduler-inspection summary for one running pipeline.
+
+    Attributes:
+        pipeline_id: Stable local identifier for the pipeline.
+        name: Optional submission-time monitoring label.
+    """
+
+    pipeline_id: int
+    name: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerSnapshot:
     """Immutable scheduler-wide snapshot.
 
@@ -82,6 +95,7 @@ class SchedulerSnapshot:
         pipelines: Aggregate pipeline counts.
         tasks: Aggregate task counts.
         resources: Deterministically ordered resource snapshots.
+        running_pipelines: Optional lightweight running-pipeline summaries.
     """
 
     shutdown_started: bool
@@ -91,6 +105,7 @@ class SchedulerSnapshot:
     pipelines: PipelineCountsSnapshot
     tasks: TaskCountsSnapshot
     resources: tuple[ResourceSnapshot, ...]
+    running_pipelines: tuple[RunningPipelineSummary, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +114,14 @@ class PipelineSnapshot:
 
     Attributes:
         pipeline_id: Stable local identifier for the pipeline.
+        name: Optional submission-time monitoring label.
         state: Public string representation of the pipeline state.
         stage_index: Current pipeline stage index.
         tasks: Aggregate task counts for that pipeline only.
     """
 
     pipeline_id: int
+    name: str | None
     state: str
     stage_index: int
     tasks: TaskCountsSnapshot

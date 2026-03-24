@@ -374,7 +374,7 @@ scheduler = stagegate.Scheduler(
 )
 try:
     pending = {
-        scheduler.run_pipeline(SamplePipeline(sample_id))
+        scheduler.run_pipeline(SamplePipeline(sample_id), name=sample_id)
         for sample_id in sample_ids
     }
 
@@ -384,7 +384,7 @@ try:
             return_when=stagegate.FIRST_COMPLETED,
         )
         for handle in done:
-            publish_result(handle.result())
+            publish_result(handle.name(), handle.result())
 finally:
     scheduler.close()
 ```
@@ -394,6 +394,8 @@ Use this pattern when:
 - one scheduler can coordinate many pipeline instances
 - the outer loop can consume results incrementally
 - ownership stays explicit because pipeline handles never mix with task handles
+- submission `name` lets the outer loop recover a sample/item label directly
+  from each completed handle without a parallel `dict[handle] -> name`
 
 ## 7. Releasing Pipeline Handles with `discard()`
 
@@ -448,15 +450,16 @@ def main(sample_ids) -> None:
         task_parallelism=8,
     ) as scheduler:
         pending = {
-            scheduler.run_pipeline(RNASeqPipeline(sample_id))
+            scheduler.run_pipeline(RNASeqPipeline(sample_id), name=sample_id)
             for sample_id in sample_ids
         }
 
         while pending:
-            view = scheduler.snapshot()
+            view = scheduler.snapshot(include_running_pipelines=True)
             print(
                 "running pipelines:",
                 view.pipelines.running,
+                [item.name for item in view.running_pipelines],
                 "admitted tasks:",
                 view.tasks.admitted,
                 "resources:",
@@ -476,6 +479,8 @@ Use this pattern when:
 
 - monitoring should happen while pipelines are still running
 - aggregate scheduler pressure should be visible without exposing mutable records
+- with `include_running_pipelines=True`, running pipeline names can be shown
+  directly from snapshot summaries
 - snapshots are useful for debugging, progress reporting, and tests
 
 ## 9. Anti-Patterns and Common Mistakes

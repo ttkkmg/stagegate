@@ -76,6 +76,14 @@ class DetachedTaskPipeline(stagegate.Pipeline):
         return "pipeline-done"
 
 
+class NamedPipeline(stagegate.Pipeline):
+    def __init__(self, user_name: str) -> None:
+        self.name = user_name
+
+    def run(self) -> str:
+        return "pipeline-done"
+
+
 def test_pipeline_run_executes_on_coordinator_thread_and_returns_result() -> None:
     scheduler = stagegate.Scheduler(
         resources={"cpu": 2},
@@ -117,6 +125,18 @@ def test_pipeline_run_executes_task_without_scheduler_or_task_resources() -> Non
     handle = scheduler.run_pipeline(ZeroResourceTaskPipeline())
 
     assert handle.result(timeout=1.0) == "task-done"
+
+
+def test_pipeline_handle_name_uses_submission_name_not_pipeline_self_name() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, pipeline_parallelism=1)
+    pipeline = NamedPipeline(user_name="user-owned")
+
+    handle = scheduler.run_pipeline(pipeline, name="submitted")
+
+    assert handle.name() == "submitted"
+    assert handle.result(timeout=1.0) == "pipeline-done"
+    assert handle.name() == "submitted"
+    assert pipeline.name == "user-owned"
 
 
 def test_pipeline_parallelism_one_starts_pipelines_in_fifo_order() -> None:
@@ -221,6 +241,8 @@ def test_discarded_terminal_pipeline_may_still_have_live_child_tasks() -> None:
         assert handle._record.exception is None
         assert handle._record.task_records
 
+    with pytest.raises(stagegate.DiscardedHandleError):
+        handle.name()
     with pytest.raises(stagegate.DiscardedHandleError):
         handle.snapshot()
 
