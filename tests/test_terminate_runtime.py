@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
 import signal
 import threading
 import time
@@ -111,6 +112,30 @@ class SubprocessTaskPipeline(stagegate.Pipeline):
         self.task_started.set()
         return stagegate.run_subprocess(
             self.argv,
+            terminate_grace_seconds=self.terminate_grace_seconds,
+        )
+
+    def run(self) -> str:
+        self.task_handle = self.task(self._child, resources={"cpu": 1}).run()
+        return "pipeline-done"
+
+
+class ShellTaskPipeline(stagegate.Pipeline):
+    def __init__(
+        self,
+        command: str,
+        *,
+        terminate_grace_seconds: float | None = 5.0,
+    ) -> None:
+        self.command = command
+        self.terminate_grace_seconds = terminate_grace_seconds
+        self.task_started = threading.Event()
+        self.task_handle: stagegate.TaskHandle | None = None
+
+    def _child(self) -> int:
+        self.task_started.set()
+        return stagegate.run_shell(
+            self.command,
             terminate_grace_seconds=self.terminate_grace_seconds,
         )
 
@@ -329,3 +354,81 @@ def test_run_subprocess_none_grace_timeout_allows_sigterm_only_termination() -> 
     assert error.pid > 0
     assert error.returncode == (((1000 + 50 + 1 + 2) & 0x7F) | 0x80)
     assert error.forced_kill is False
+
+
+def test_run_shell_returns_zero_and_supports_pipe_and_redirection(
+    tmp_path: Path,
+) -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    output_path = tmp_path / "upper.txt"
+    command = f"printf 'abc' | tr a-z A-Z > {shlex.quote(str(output_path))}"
+    pipeline = ShellTaskPipeline(command)
+
+    handle = scheduler.run_pipeline(pipeline)
+
+    assert handle.result(timeout=1.0) == "pipeline-done"
+    assert pipeline.task_handle is not None
+    assert pipeline.task_handle.result(timeout=1.0) == 0
+    assert output_path.read_text() == "ABC"
+
+
+def test_run_shell_graceful_terminate_raises_terminated_error() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    command = f"{shlex.quote(str(PROBE_PATH))} 1000 50 1 2"
+    pipeline = ShellTaskPipeline(command, terminate_grace_seconds=0.5)
+
+    handle = scheduler.run_pipeline(pipeline)
+
+    assert handle.result(timeout=1.0) == "pipeline-done"
+    assert pipeline.task_handle is not None
+    assert pipeline.task_started.wait(timeout=1.0) is True
+    time.sleep(0.05)
+    assert pipeline.task_handle.request_terminate() is True
+
+    with pytest.raises(stagegate.TerminatedError) as exc_info:
+        pipeline.task_handle.result(timeout=2.0)
+
+    error = exc_info.value
+    assert error.argv == ("/bin/sh", "-c", command)
+    assert isinstance(error.pid, int)
+    assert error.pid > 0
+    assert error.returncode == -signal.SIGTERM
+    assert error.forced_kill is False
+    assert pipeline.task_handle._record.state is TaskState.TERMINATED
+
+
+def test_run_shell_forced_kill_sets_forced_kill_flag() -> None:
+    scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
+    command = f"{shlex.quote(str(PROBE_PATH))} --ignore-term 1000 50 1 2"
+    pipeline = ShellTaskPipeline(command, terminate_grace_seconds=0)
+
+    handle = scheduler.run_pipeline(pipeline)
+
+    assert handle.result(timeout=1.0) == "pipeline-done"
+    assert pipeline.task_handle is not None
+    assert pipeline.task_started.wait(timeout=1.0) is True
+    time.sleep(0.05)
+    assert pipeline.task_handle.request_terminate() is True
+
+    with pytest.raises(stagegate.TerminatedError) as exc_info:
+        pipeline.task_handle.result(timeout=2.0)
+
+    error = exc_info.value
+    assert error.argv == ("/bin/sh", "-c", command)
+    assert isinstance(error.pid, int)
+    assert error.pid > 0
+    assert error.returncode in {-signal.SIGTERM, -signal.SIGKILL}
+    assert error.forced_kill is True
+    assert pipeline.task_handle._record.state is TaskState.TERMINATED
+
+
+def test_run_shell_rejects_negative_grace_timeout() -> None:
+    with pytest.raises(ValueError):
+        stagegate.run_shell("true", terminate_grace_seconds=-0.1)
+
+
+def test_run_shell_rejects_win32(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subprocess_helpers.sys, "platform", "win32")
+
+    with pytest.raises(NotImplementedError, match="POSIX platforms"):
+        stagegate.run_shell("echo hi")

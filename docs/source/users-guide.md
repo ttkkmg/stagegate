@@ -229,6 +229,7 @@ Inside the task:
 For external processes:
 
 - `stagegate.run_subprocess(...)`
+- `stagegate.run_shell(...)`
 
 This keeps the scheduler itself non-preemptive while still giving users a
 practical stop path for long-running work.
@@ -244,8 +245,9 @@ The intended model is cooperative:
 The subprocess helper is currently intended for POSIX platforms such as Linux,
 macOS, and BSD. It relies on process-group signaling with `SIGTERM` and
 optional `SIGKILL`. If you do not use `stagegate.run_subprocess(...)`,
-`stagegate` may still be a reasonable fit for Windows-based workloads, but this
-particular terminate path is not yet documented as Windows-compatible.
+`stagegate.run_shell(...)`, `stagegate` may still be a reasonable fit for
+Windows-based workloads, but these terminate paths are not yet documented as
+Windows-compatible.
 
 ## When Stagegate Is a Good Fit
 

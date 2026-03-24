@@ -358,6 +358,8 @@ Use this pattern when:
 
 - child processes are launched with explicit `argv`
 - terminate requests have a defined subprocess-aware path
+- if you need shell redirection or pipes, prefer `stagegate.run_shell(...)`
+  instead of forcing shell syntax into `run_subprocess(...)`
 - the pipeline can wait for terminated siblings, clean up partial files, and continue
 
 ## 6. Coordinating Many Pipelines with `wait_pipelines(...)`

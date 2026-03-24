@@ -36,59 +36,12 @@ def _send_process_group_signal(pid: int, signum: int) -> None:
         return
 
 
-def run_subprocess(
-    argv: Sequence[str | PathLike[str]],
+def _wait_terminate_aware_process(
+    proc: subprocess.Popen[bytes],
     *,
-    terminate_grace_seconds: float | None = 5.0,
+    argv: tuple[str, ...],
+    terminate_grace_seconds: float | None,
 ) -> int:
-    """Run a subprocess that cooperates with task termination requests.
-
-    The child is started in its own process group. If a task terminate request
-    is observed first, the helper sends ``SIGTERM`` to that process group and,
-    if necessary, escalates to ``SIGKILL`` after the grace timeout.
-
-    This helper is currently intended for POSIX platforms such as Linux,
-    macOS, and BSD. Its terminate path depends on process-group signaling
-    semantics that are not currently documented or supported on Windows.
-    `stagegate` itself may still be usable on Windows for workloads that do not
-    rely on this helper.
-
-    Args:
-        argv: Executable plus arguments. ``shell=True`` is never used.
-        terminate_grace_seconds: Seconds to wait after ``SIGTERM`` before
-            sending ``SIGKILL``. ``None`` means wait indefinitely after
-            ``SIGTERM``. ``0`` is allowed and means immediate escalation if the
-            process has not already exited.
-
-    Returns:
-        int: Process return code on normal completion.
-
-    Raises:
-        ValueError: If ``argv`` is empty or the grace timeout is negative.
-        NotImplementedError: If called on Windows, where the current
-            process-group terminate path is not supported.
-        TerminatedError: If the terminate path is taken and the child exits
-            after the terminate request.
-    """
-
-    normalized_argv = _normalize_argv(argv)
-    if terminate_grace_seconds is not None and terminate_grace_seconds < 0:
-        raise ValueError(
-            "terminate_grace_seconds must be None or a non-negative number"
-        )
-    if sys.platform == "win32":
-        raise NotImplementedError(
-            "run_subprocess() terminate support is currently available only "
-            "on POSIX platforms"
-        )
-
-    proc = subprocess.Popen(
-        normalized_argv,
-        stdin=subprocess.DEVNULL,
-        stdout=None,
-        stderr=None,
-        start_new_session=True,
-    )
     pid = proc.pid
     context = current_task_context()
     if context is None:
@@ -143,8 +96,125 @@ def run_subprocess(
 
     waiter.join()
     raise TerminatedError(
-        argv=normalized_argv,
+        argv=argv,
         pid=pid,
         returncode=wait_state.returncode,
         forced_kill=forced_kill,
+    )
+
+
+def run_subprocess(
+    argv: Sequence[str | PathLike[str]],
+    *,
+    terminate_grace_seconds: float | None = 5.0,
+) -> int:
+    """Run a subprocess that cooperates with task termination requests.
+
+    The child is started in its own process group. If a task terminate request
+    is observed first, the helper sends ``SIGTERM`` to that process group and,
+    if necessary, escalates to ``SIGKILL`` after the grace timeout.
+
+    This helper is currently intended for POSIX platforms such as Linux,
+    macOS, and BSD. Its terminate path depends on process-group signaling
+    semantics that are not currently documented or supported on Windows.
+    `stagegate` itself may still be usable on Windows for workloads that do not
+    rely on this helper.
+
+    Args:
+        argv: Executable plus arguments. ``shell=True`` is never used.
+        terminate_grace_seconds: Seconds to wait after ``SIGTERM`` before
+            sending ``SIGKILL``. ``None`` means wait indefinitely after
+            ``SIGTERM``. ``0`` is allowed and means immediate escalation if the
+            process has not already exited.
+
+    Returns:
+        int: Process return code on normal completion.
+
+    Raises:
+        ValueError: If ``argv`` is empty or the grace timeout is negative.
+        NotImplementedError: If called on Windows, where the current
+            process-group terminate path is not supported.
+        TerminatedError: If the terminate path is taken and the child exits
+            after the terminate request.
+    """
+
+    normalized_argv = _normalize_argv(argv)
+    if terminate_grace_seconds is not None and terminate_grace_seconds < 0:
+        raise ValueError(
+            "terminate_grace_seconds must be None or a non-negative number"
+        )
+    if sys.platform == "win32":
+        raise NotImplementedError(
+            "run_subprocess() terminate support is currently available only "
+            "on POSIX platforms"
+        )
+
+    proc = subprocess.Popen(
+        normalized_argv,
+        stdin=subprocess.DEVNULL,
+        stdout=None,
+        stderr=None,
+        start_new_session=True,
+    )
+    return _wait_terminate_aware_process(
+        proc,
+        argv=normalized_argv,
+        terminate_grace_seconds=terminate_grace_seconds,
+    )
+
+
+def run_shell(
+    command: str,
+    *,
+    terminate_grace_seconds: float | None = 5.0,
+) -> int:
+    """Run a shell command that cooperates with task termination requests.
+
+    The command is executed via POSIX-minimum ``/bin/sh -c``. The shell is
+    started in its own process group so a terminate request can signal the
+    entire shell-controlled process tree.
+
+    Args:
+        command: Shell command string executed by ``/bin/sh -c``.
+        terminate_grace_seconds: Seconds to wait after ``SIGTERM`` before
+            sending ``SIGKILL``. ``None`` means wait indefinitely after
+            ``SIGTERM``. ``0`` is allowed and means immediate escalation if the
+            shell process group has not already exited.
+
+    Returns:
+        int: Shell return code on normal completion.
+
+    Raises:
+        TypeError: If ``command`` is not a string.
+        ValueError: If the grace timeout is negative.
+        NotImplementedError: If called on Windows, where the current
+            process-group terminate path is not supported.
+        TerminatedError: If the terminate path is taken and the shell exits
+            after the terminate request.
+    """
+
+    if not isinstance(command, str):
+        raise TypeError("command must be a string")
+    if terminate_grace_seconds is not None and terminate_grace_seconds < 0:
+        raise ValueError(
+            "terminate_grace_seconds must be None or a non-negative number"
+        )
+    if sys.platform == "win32":
+        raise NotImplementedError(
+            "run_shell() terminate support is currently available only "
+            "on POSIX platforms"
+        )
+
+    argv = ("/bin/sh", "-c", command)
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=None,
+        stderr=None,
+        start_new_session=True,
+    )
+    return _wait_terminate_aware_process(
+        proc,
+        argv=argv,
+        terminate_grace_seconds=terminate_grace_seconds,
     )
