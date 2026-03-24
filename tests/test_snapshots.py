@@ -50,6 +50,20 @@ def test_scheduler_snapshot_on_new_scheduler_is_empty() -> None:
     )
 
 
+def test_scheduler_snapshot_on_new_scheduler_without_resources_has_empty_resources() -> (
+    None
+):
+    scheduler = stagegate.Scheduler(task_parallelism=3)
+
+    snapshot = scheduler.snapshot()
+
+    assert snapshot.shutdown_started is False
+    assert snapshot.closed is False
+    assert snapshot.pipeline_parallelism == 1
+    assert snapshot.task_parallelism == 3
+    assert snapshot.resources == ()
+
+
 def test_scheduler_snapshot_tracks_terminal_pipeline_and_task_totals() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
 

@@ -109,7 +109,7 @@ class Pipeline:
         self,
         fn: Callable[..., Any],
         *,
-        resources: dict[str, int | float],
+        resources: dict[str, int | float] | None = None,
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
         name: str | None = None,
@@ -118,7 +118,8 @@ class Pipeline:
 
         Args:
             fn: Callable to execute later on a worker thread.
-            resources: Abstract resource requirements for admission control.
+            resources: Optional abstract resource requirements for admission
+                control. ``None`` means no resources are required.
             args: Positional arguments passed to ``fn``.
             kwargs: Keyword arguments passed to ``fn``.
             name: Optional user-facing task label.
@@ -130,7 +131,7 @@ class Pipeline:
         return TaskBuilder(
             pipeline=self,
             fn=fn,
-            resources=dict(resources),
+            resources={} if resources is None else dict(resources),
             args=args,
             kwargs={} if kwargs is None else dict(kwargs),
             name=name,

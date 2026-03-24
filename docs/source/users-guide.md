@@ -156,6 +156,10 @@ This is deliberate:
 - it avoids pretending to be an operating-system-level resource manager
 - it lets you model the constraints that actually matter in your environment
 
+If you create `Scheduler()` without `resources=...`, no resource labels exist.
+In that mode, tasks should omit `resources`; supplying non-empty task resource
+requirements will be rejected.
+
 ## What Writing a Pipeline Feels Like
 
 A pipeline usually reads like structured Python, not orchestration metadata.

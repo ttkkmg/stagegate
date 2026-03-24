@@ -46,7 +46,8 @@ class Scheduler:
     """Single-process scheduler for stage-aware local pipelines and tasks.
 
     Args:
-        resources: Abstract resource capacities such as ``{"cpu": 8}``.
+        resources: Optional abstract resource capacities such as
+            ``{"cpu": 8}``. ``None`` means no resource labels are configured.
             These are scheduler-defined admission labels, not OS-enforced
             quotas.
         pipeline_parallelism: Maximum number of pipeline coordinator threads.
@@ -57,11 +58,11 @@ class Scheduler:
     def __init__(
         self,
         *,
-        resources: dict[str, int | float],
+        resources: dict[str, int | float] | None = None,
         pipeline_parallelism: int = 1,
         task_parallelism: int | None = None,
     ) -> None:
-        self._resources = dict(resources)
+        self._resources = {} if resources is None else dict(resources)
         self._pipeline_parallelism = pipeline_parallelism
         self._task_parallelism = task_parallelism
         self._runtime = SchedulerRuntime()

@@ -20,6 +20,12 @@ class TaskResultPipeline(stagegate.Pipeline):
         return handle.result(timeout=1.0)
 
 
+class ZeroResourceTaskPipeline(stagegate.Pipeline):
+    def run(self) -> str:
+        handle = self.task(lambda: "task-done").run()
+        return handle.result(timeout=1.0)
+
+
 class StageCapturePipeline(stagegate.Pipeline):
     def __init__(self) -> None:
         self.first_stage_snapshot: int | None = None
@@ -103,6 +109,14 @@ def test_stage_forward_changes_stage_snapshot_for_later_tasks() -> None:
     assert handle.result(timeout=1.0) is None
     assert pipeline.first_stage_snapshot == 0
     assert pipeline.second_stage_snapshot == 1
+
+
+def test_pipeline_run_executes_task_without_scheduler_or_task_resources() -> None:
+    scheduler = stagegate.Scheduler(pipeline_parallelism=1, task_parallelism=1)
+
+    handle = scheduler.run_pipeline(ZeroResourceTaskPipeline())
+
+    assert handle.result(timeout=1.0) == "task-done"
 
 
 def test_pipeline_parallelism_one_starts_pipelines_in_fifo_order() -> None:

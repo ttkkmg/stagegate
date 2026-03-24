@@ -31,6 +31,13 @@ def test_scheduler_observation_predicates_on_new_scheduler() -> None:
     assert scheduler.closed() is False
 
 
+def test_scheduler_observation_predicates_on_new_scheduler_without_resources() -> None:
+    scheduler = stagegate.Scheduler()
+
+    assert scheduler.shutdown_started() is False
+    assert scheduler.closed() is False
+
+
 def test_context_manager_calls_close_on_exit() -> None:
     with stagegate.Scheduler(resources={"cpu": 2}) as scheduler:
         assert scheduler.closed() is False
@@ -50,6 +57,15 @@ def test_shutdown_only_starts_shutdown() -> None:
 
 def test_close_closes_empty_scheduler() -> None:
     scheduler = stagegate.Scheduler(resources={"cpu": 2})
+
+    scheduler.close()
+
+    assert scheduler.shutdown_started() is True
+    assert scheduler.closed() is True
+
+
+def test_close_closes_empty_scheduler_without_resources() -> None:
+    scheduler = stagegate.Scheduler()
 
     scheduler.close()
 

@@ -46,7 +46,7 @@ def bind_running_pipeline(
 
 def test_task_builder_run_rejects_pipeline_not_bound_to_scheduler() -> None:
     pipeline = stagegate.Pipeline()
-    builder = pipeline.task(lambda: None, resources={"cpu": 1})
+    builder = pipeline.task(lambda: None)
 
     with pytest.raises(RuntimeError):
         builder.run()
@@ -140,6 +140,39 @@ def test_task_builder_run_returns_task_handle_and_registers_task() -> None:
     assert len(pipeline_record.task_records) == 1
     assert len(scheduler._runtime.task_queue) == 1
     assert scheduler._runtime.task_queue[0].record is record
+
+
+def test_task_builder_run_defaults_resources_to_empty_mapping() -> None:
+    scheduler = stagegate.Scheduler()
+    pipeline, pipeline_record = bind_running_pipeline(scheduler, stage_index=2)
+
+    handle = pipeline.task(lambda: "ok").run()
+
+    record = handle._record
+    assert record.scheduler is scheduler
+    assert record.pipeline_record is pipeline_record
+    assert record.state is TaskState.QUEUED
+    assert record.resources_required == {}
+    assert record.stage_snapshot == 2
+
+
+def test_task_builder_run_accepts_explicit_empty_resources_on_empty_scheduler() -> None:
+    scheduler = stagegate.Scheduler()
+    pipeline, _ = bind_running_pipeline(scheduler)
+
+    handle = pipeline.task(lambda: "ok", resources={}).run()
+
+    assert handle._record.resources_required == {}
+
+
+def test_task_builder_run_rejects_non_empty_resources_on_scheduler_without_labels() -> (
+    None
+):
+    scheduler = stagegate.Scheduler()
+    pipeline, _ = bind_running_pipeline(scheduler)
+
+    with pytest.raises(stagegate.UnknownResourceError):
+        pipeline.task(lambda: None, resources={"cpu": 1}).run()
 
 
 def test_task_builder_run_assigns_monotonic_local_and_global_sequences() -> None:
