@@ -5,6 +5,7 @@ import shlex
 import signal
 import threading
 import time
+from typing import Any
 
 import pytest
 
@@ -14,6 +15,31 @@ from stagegate._states import TaskState
 
 
 PROBE_PATH = Path(__file__).parent / "helpers" / "subprocess_probe.py"
+
+
+def wait_for_tracked_subprocess_count(expected: int, timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        with subprocess_helpers._TRACKED_SUBPROCESSES_LOCK:
+            count = len(subprocess_helpers._TRACKED_SUBPROCESSES)
+        if count == expected:
+            return
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+def run_in_thread_and_capture(fn, *args: Any, **kwargs: Any) -> tuple[threading.Thread, dict[str, Any]]:
+    result: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # pragma: no cover - diagnostic path
+            result["error"] = exc
+
+    thread = threading.Thread(target=target, name="subprocess-capture")
+    thread.start()
+    return thread, result
 
 
 class CooperativeTerminatePipeline(stagegate.Pipeline):
@@ -432,3 +458,70 @@ def test_run_shell_rejects_win32(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(NotImplementedError, match="POSIX platforms"):
         stagegate.run_shell("echo hi")
+
+
+def test_terminate_tracked_subprocesses_returns_zero_when_registry_is_empty() -> None:
+    wait_for_tracked_subprocess_count(0)
+
+    assert stagegate.terminate_tracked_subprocesses() == 0
+
+
+def test_terminate_tracked_subprocesses_signals_run_subprocess_child_group() -> None:
+    argv = [str(PROBE_PATH), "1000", "20", "1", "2"]
+    thread, result = run_in_thread_and_capture(stagegate.run_subprocess, argv)
+
+    try:
+        wait_for_tracked_subprocess_count(1)
+        assert stagegate.terminate_tracked_subprocesses() == 1
+        thread.join(timeout=2.0)
+        assert thread.is_alive() is False
+        assert "error" not in result
+        assert isinstance(result["value"], int)
+        assert result["value"] != ((1000 + 20 + 1 + 2) & 0x7F)
+        wait_for_tracked_subprocess_count(0)
+    finally:
+        if thread.is_alive():
+            stagegate.terminate_tracked_subprocesses()
+        thread.join(timeout=0.1)
+
+
+def test_terminate_tracked_subprocesses_signals_run_shell_child_group() -> None:
+    command = f"{shlex.quote(str(PROBE_PATH))} 1000 20 1 2"
+    thread, result = run_in_thread_and_capture(stagegate.run_shell, command)
+
+    try:
+        wait_for_tracked_subprocess_count(1)
+        assert stagegate.terminate_tracked_subprocesses() == 1
+        thread.join(timeout=2.0)
+        assert thread.is_alive() is False
+        assert "error" not in result
+        assert isinstance(result["value"], int)
+        assert result["value"] != 0
+        wait_for_tracked_subprocess_count(0)
+    finally:
+        if thread.is_alive():
+            stagegate.terminate_tracked_subprocesses()
+        thread.join(timeout=0.1)
+
+
+def test_terminate_tracked_subprocesses_does_not_keep_naturally_exited_processes() -> (
+    None
+):
+    argv = [str(PROBE_PATH), "20", "0", "1", "2"]
+    thread, result = run_in_thread_and_capture(stagegate.run_subprocess, argv)
+
+    thread.join(timeout=2.0)
+    assert thread.is_alive() is False
+    assert "error" not in result
+    assert result["value"] == ((20 + 0 + 1 + 2) & 0x7F)
+    wait_for_tracked_subprocess_count(0)
+    assert stagegate.terminate_tracked_subprocesses() == 0
+
+
+def test_terminate_tracked_subprocesses_rejects_win32(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(subprocess_helpers.sys, "platform", "win32")
+
+    with pytest.raises(NotImplementedError, match="POSIX platforms"):
+        stagegate.terminate_tracked_subprocesses()

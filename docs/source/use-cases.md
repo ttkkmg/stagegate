@@ -352,6 +352,13 @@ def main(argv_batches) -> None:
             for argv_groups in argv_batches
         }
         ...
+
+
+try:
+    main(argv_batches)
+except KeyboardInterrupt:
+    stagegate.terminate_tracked_subprocesses()
+    raise
 ```
 
 Use this pattern when:
@@ -360,6 +367,8 @@ Use this pattern when:
 - terminate requests have a defined subprocess-aware path
 - if you need shell redirection or pipes, prefer `stagegate.run_shell(...)`
   instead of forcing shell syntax into `run_subprocess(...)`
+- if the application itself is interrupted, user-managed shutdown cleanup can
+  call `stagegate.terminate_tracked_subprocesses()`
 - the pipeline can wait for terminated siblings, clean up partial files, and continue
 
 ## 6. Coordinating Many Pipelines with `wait_pipelines(...)`

@@ -22,6 +22,17 @@ class _ProcessWaitState:
     returncode: int | None = None
 
 
+@dataclass(slots=True)
+class _TrackedSubprocessRecord:
+    pgid: int
+    argv: tuple[str, ...]
+    kind: str
+
+
+_TRACKED_SUBPROCESSES_LOCK = threading.Lock()
+_TRACKED_SUBPROCESSES: dict[int, _TrackedSubprocessRecord] = {}
+
+
 def _normalize_argv(argv: Sequence[str | PathLike[str]]) -> tuple[str, ...]:
     normalized = tuple(os.fspath(arg) for arg in argv)
     if not normalized:
@@ -36,6 +47,25 @@ def _send_process_group_signal(pid: int, signum: int) -> None:
         return
 
 
+def _register_tracked_subprocess(
+    *,
+    pgid: int,
+    argv: tuple[str, ...],
+    kind: str,
+) -> None:
+    with _TRACKED_SUBPROCESSES_LOCK:
+        _TRACKED_SUBPROCESSES[pgid] = _TrackedSubprocessRecord(
+            pgid=pgid,
+            argv=argv,
+            kind=kind,
+        )
+
+
+def _unregister_tracked_subprocess(pgid: int) -> None:
+    with _TRACKED_SUBPROCESSES_LOCK:
+        _TRACKED_SUBPROCESSES.pop(pgid, None)
+
+
 def _wait_terminate_aware_process(
     proc: subprocess.Popen[bytes],
     *,
@@ -44,13 +74,15 @@ def _wait_terminate_aware_process(
 ) -> int:
     pid = proc.pid
     context = current_task_context()
-    if context is None:
-        return proc.wait()
-
     wait_state = _ProcessWaitState()
 
     def wait_for_process_exit() -> None:
         returncode = proc.wait()
+        _unregister_tracked_subprocess(pid)
+        if context is None:
+            wait_state.exited = True
+            wait_state.returncode = returncode
+            return
         with context._condition:
             wait_state.exited = True
             wait_state.returncode = returncode
@@ -62,6 +94,11 @@ def _wait_terminate_aware_process(
         daemon=True,
     )
     waiter.start()
+
+    if context is None:
+        waiter.join()
+        assert wait_state.returncode is not None
+        return wait_state.returncode
 
     with context._condition:
         while not wait_state.exited and not context.terminate_requested():
@@ -101,6 +138,39 @@ def _wait_terminate_aware_process(
         returncode=wait_state.returncode,
         forced_kill=forced_kill,
     )
+
+
+def terminate_tracked_subprocesses() -> int:
+    """Send ``SIGTERM`` to all currently tracked subprocess process groups.
+
+    This helper is intended for user-managed shutdown cleanup, for example from
+    a Python-level signal handler or ``KeyboardInterrupt`` cleanup path.
+    `stagegate` does not install signal handlers itself.
+
+    Returns:
+        int: Number of tracked process groups that were targeted.
+
+    Raises:
+        NotImplementedError: If called on Windows, where the current
+            process-group signaling contract is not supported.
+    """
+
+    if sys.platform == "win32":
+        raise NotImplementedError(
+            "terminate_tracked_subprocesses() is currently available only "
+            "on POSIX platforms"
+        )
+
+    with _TRACKED_SUBPROCESSES_LOCK:
+        pgids = tuple(_TRACKED_SUBPROCESSES)
+
+    for pgid in pgids:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+
+    return len(pgids)
 
 
 def run_subprocess(
@@ -155,6 +225,11 @@ def run_subprocess(
         stdout=None,
         stderr=None,
         start_new_session=True,
+    )
+    _register_tracked_subprocess(
+        pgid=proc.pid,
+        argv=normalized_argv,
+        kind="subprocess",
     )
     return _wait_terminate_aware_process(
         proc,
@@ -212,6 +287,11 @@ def run_shell(
         stdout=None,
         stderr=None,
         start_new_session=True,
+    )
+    _register_tracked_subprocess(
+        pgid=proc.pid,
+        argv=argv,
+        kind="shell",
     )
     return _wait_terminate_aware_process(
         proc,

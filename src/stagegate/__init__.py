@@ -10,7 +10,11 @@ from .exceptions import (
 from .handles import PipelineHandle, TaskHandle
 from .pipeline import Pipeline
 from .scheduler import Scheduler
-from .subprocesses import run_shell, run_subprocess
+from .subprocesses import (
+    run_shell,
+    run_subprocess,
+    terminate_tracked_subprocesses,
+)
 from .snapshots import (
     PipelineCountsSnapshot,
     PipelineSnapshot,
@@ -36,6 +40,7 @@ __all__ = [
     "UnknownResourceError",
     "UnschedulableTaskError",
     "terminate_requested",
+    "terminate_tracked_subprocesses",
     "run_subprocess",
     "run_shell",
     "ResourceSnapshot",

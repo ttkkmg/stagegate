@@ -230,6 +230,7 @@ For external processes:
 
 - `stagegate.run_subprocess(...)`
 - `stagegate.run_shell(...)`
+- `stagegate.terminate_tracked_subprocesses()` for user-managed shutdown cleanup
 
 This keeps the scheduler itself non-preemptive while still giving users a
 practical stop path for long-running work.

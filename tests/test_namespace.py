@@ -17,6 +17,7 @@ def test_top_level_namespace_exports_expected_symbols() -> None:
     assert issubclass(stagegate.UnknownResourceError, ValueError)
     assert issubclass(stagegate.UnschedulableTaskError, ValueError)
     assert stagegate.terminate_requested is not None
+    assert stagegate.terminate_tracked_subprocesses is not None
     assert stagegate.run_subprocess is not None
     assert stagegate.run_shell is not None
     assert stagegate.ResourceSnapshot is not None
