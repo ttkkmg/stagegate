@@ -117,14 +117,13 @@ class Scheduler:
         with self._condition:
             return self._runtime.state is SchedulerState.CLOSED
 
-    def snapshot(self, *, include_running_pipelines: bool = False) -> SchedulerSnapshot:
+    def snapshot(self) -> SchedulerSnapshot:
         """Return an immutable point-in-time snapshot of scheduler state.
 
         Returns:
             SchedulerSnapshot: Detached aggregate view of scheduler state,
                 counts, and resources.
         """
-        running_pipeline_entries: tuple[tuple[int, str | None], ...] = ()
         with self._condition:
             pipeline_counts = PipelineCountsSnapshot(
                 queued=self._runtime.queued_pipeline_count,
@@ -167,20 +166,17 @@ class Scheduler:
                 )
                 for label in sorted(self._resources)
             )
-            if include_running_pipelines:
-                running_pipeline_entries = tuple(
-                    (record.pipeline_id, record.name)
-                    for record in self._runtime.running_pipeline_records.values()
-                )
+            running_pipeline_entries = tuple(
+                (record.pipeline_id, record.name)
+                for record in self._runtime.running_pipeline_records.values()
+            )
             shutdown_started = self._runtime.state is not SchedulerState.OPEN
             closed = self._runtime.state is SchedulerState.CLOSED
 
-        running_pipeline_summaries: tuple[RunningPipelineSummary, ...] = ()
-        if include_running_pipelines:
-            running_pipeline_summaries = tuple(
-                RunningPipelineSummary(pipeline_id=pipeline_id, name=name)
-                for pipeline_id, name in sorted(running_pipeline_entries)
-            )
+        running_pipeline_summaries = tuple(
+            RunningPipelineSummary(pipeline_id=pipeline_id, name=name)
+            for pipeline_id, name in sorted(running_pipeline_entries)
+        )
         return SchedulerSnapshot(
             shutdown_started=shutdown_started,
             closed=closed,

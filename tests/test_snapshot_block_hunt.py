@@ -60,7 +60,7 @@ def test_snapshot_with_running_pipelines_returns_without_blocking() -> None:
 
     def capture_snapshot() -> None:
         try:
-            result["snapshot"] = scheduler.snapshot(include_running_pipelines=True)
+            result["snapshot"] = scheduler.snapshot()
         except BaseException as exc:  # pragma: no cover - diagnostic path
             result["error"] = exc
         finally:
@@ -112,7 +112,7 @@ def test_snapshot_with_many_running_pipelines_makes_bounded_progress() -> None:
         nonlocal completed
         try:
             for _ in range(100):
-                snapshot = scheduler.snapshot(include_running_pipelines=True)
+                snapshot = scheduler.snapshot()
                 assert snapshot.pipelines.running == 16
                 assert len(snapshot.running_pipelines) == 16
                 completed += 1
@@ -155,7 +155,7 @@ def test_snapshot_under_wait_loop_contention_makes_progress() -> None:
         nonlocal snapshot_count
         try:
             while not stop.is_set():
-                scheduler.snapshot(include_running_pipelines=True)
+                scheduler.snapshot()
                 snapshot_count += 1
         except BaseException as exc:  # pragma: no cover - diagnostic path
             errors.append(exc)
@@ -208,7 +208,7 @@ def test_snapshot_under_task_scheduler_churn_makes_progress() -> None:
         nonlocal snapshot_count
         try:
             while not stop.is_set():
-                scheduler.snapshot(include_running_pipelines=True)
+                scheduler.snapshot()
                 snapshot_count += 1
         except BaseException as exc:  # pragma: no cover - diagnostic path
             errors.append(exc)

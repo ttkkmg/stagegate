@@ -457,7 +457,7 @@ def main(sample_ids) -> None:
         }
 
         while pending:
-            view = scheduler.snapshot(include_running_pipelines=True)
+            view = scheduler.snapshot()
             print(
                 "running pipelines:",
                 view.pipelines.running,
@@ -481,8 +481,7 @@ Use this pattern when:
 
 - monitoring should happen while pipelines are still running
 - aggregate scheduler pressure should be visible without exposing mutable records
-- with `include_running_pipelines=True`, running pipeline names can be shown
-  directly from snapshot summaries
+- running pipeline names can be shown directly from snapshot summaries
 - snapshots are useful for debugging, progress reporting, and tests
 
 ## 9. Anti-Patterns and Common Mistakes

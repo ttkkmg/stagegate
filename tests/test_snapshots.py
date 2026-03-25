@@ -76,7 +76,7 @@ def test_scheduler_snapshot_on_new_scheduler_without_resources_has_empty_resourc
     assert snapshot.resources == ()
 
 
-def test_scheduler_snapshot_without_opt_in_exposes_no_running_pipeline_summaries() -> (
+def test_scheduler_snapshot_on_new_scheduler_has_no_running_pipeline_summaries() -> (
     None
 ):
     scheduler = stagegate.Scheduler(resources={"cpu": 2}, task_parallelism=1)
@@ -202,7 +202,7 @@ def test_scheduler_snapshot_with_running_pipelines_reports_submission_names() ->
 
     assert running.started.wait(timeout=1.0) is True
 
-    snapshot = scheduler.snapshot(include_running_pipelines=True)
+    snapshot = scheduler.snapshot()
 
     assert snapshot.running_pipelines == (
         stagegate.RunningPipelineSummary(
@@ -233,7 +233,7 @@ def test_scheduler_snapshot_with_running_pipelines_orders_summaries_by_pipeline_
     assert second.started.wait(timeout=1.0) is True
     assert third.started.wait(timeout=1.0) is True
 
-    snapshot = scheduler.snapshot(include_running_pipelines=True)
+    snapshot = scheduler.snapshot()
 
     assert snapshot.pipelines.running == 3
     assert snapshot.running_pipelines == (
@@ -274,7 +274,7 @@ def test_scheduler_snapshot_with_running_pipelines_excludes_queued_and_terminal_
     assert first.started.wait(timeout=1.0) is True
     assert second.started.wait(timeout=1.0) is True
 
-    initial_snapshot = scheduler.snapshot(include_running_pipelines=True)
+    initial_snapshot = scheduler.snapshot()
     assert initial_snapshot.pipelines.queued == 1
     assert initial_snapshot.pipelines.running == 2
     assert initial_snapshot.running_pipelines == (
@@ -292,7 +292,7 @@ def test_scheduler_snapshot_with_running_pipelines_excludes_queued_and_terminal_
     assert first_handle.result(timeout=1.0) == "pipeline-done"
     assert queued.started.wait(timeout=1.0) is True
 
-    second_snapshot = scheduler.snapshot(include_running_pipelines=True)
+    second_snapshot = scheduler.snapshot()
     assert second_snapshot.pipelines.queued == 0
     assert second_snapshot.pipelines.running == 2
     assert second_snapshot.pipelines.succeeded == 1
