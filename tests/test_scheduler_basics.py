@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 import stagegate
 from stagegate._records import PipelineQueueEntry, PipelineRecord
 from stagegate._states import PipelineState
@@ -36,6 +38,11 @@ def test_scheduler_observation_predicates_on_new_scheduler_without_resources() -
 
     assert scheduler.shutdown_started() is False
     assert scheduler.closed() is False
+
+
+def test_scheduler_rejects_invalid_exception_exit_policy() -> None:
+    with pytest.raises(ValueError, match="invalid exception_exit_policy"):
+        stagegate.Scheduler(exception_exit_policy="invalid")
 
 
 def test_context_manager_calls_close_on_exit() -> None:

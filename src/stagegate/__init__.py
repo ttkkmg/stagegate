@@ -3,6 +3,7 @@
 from .exceptions import (
     CancelledError,
     DiscardedHandleError,
+    SchedulerAbortError,
     TerminatedError,
     UnknownResourceError,
     UnschedulableTaskError,
@@ -36,6 +37,7 @@ __all__ = [
     "ALL_COMPLETED",
     "CancelledError",
     "DiscardedHandleError",
+    "SchedulerAbortError",
     "TerminatedError",
     "UnknownResourceError",
     "UnschedulableTaskError",

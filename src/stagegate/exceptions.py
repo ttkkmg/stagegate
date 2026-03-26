@@ -51,6 +51,15 @@ class TerminatedError(Exception):
         super().__init__(message)
 
 
+class SchedulerAbortError(Exception):
+    """Raised when a running pipeline is aborted during fail-fast cleanup.
+
+    This exception is used for pipelines that were already running when a
+    scheduler context-manager block exited with an uncaught exception under the
+    fail-fast exceptional-exit policy.
+    """
+
+
 class DiscardedHandleError(RuntimeError):
     """Raised when an operation is requested from a discarded handle."""
 

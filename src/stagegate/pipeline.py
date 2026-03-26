@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from .handles import TaskHandle
 from ._states import PipelineState
+from .exceptions import SchedulerAbortError
 from ._wait_utils import (
     monotonic_deadline,
     remaining_timeout,
@@ -60,8 +61,9 @@ class TaskBuilder:
             ValueError: If resource amounts are invalid.
         """
         pipeline = self.pipeline
-        scheduler, _ = pipeline._require_control_context()
+        scheduler, record = pipeline._require_control_context()
         with scheduler._condition:
+            pipeline._raise_if_abort_requested_locked(record)
             return scheduler._submit_task_builder_locked(self)
 
 
@@ -105,6 +107,12 @@ class Pipeline:
             )
         return scheduler, record
 
+    def _raise_if_abort_requested_locked(self, record: PipelineRecord) -> None:
+        if record.abort_requested:
+            raise SchedulerAbortError(
+                "pipeline aborted during scheduler fail-fast cleanup"
+            )
+
     def task(
         self,
         fn: Callable[..., Any],
@@ -146,6 +154,7 @@ class Pipeline:
         """
         scheduler, record = self._require_control_context()
         with scheduler._condition:
+            self._raise_if_abort_requested_locked(record)
             record.stage_index += 1
 
     def wait(
@@ -160,7 +169,9 @@ class Pipeline:
             handles: Task handles created by this pipeline.
             timeout: Maximum wait time in seconds. ``None`` means unbounded
                 wait and ``0`` means immediate poll.
-            return_when: One of the public wait-condition constants.
+            return_when: One of ``stagegate.FIRST_COMPLETED``,
+                ``stagegate.FIRST_EXCEPTION``, or
+                ``stagegate.ALL_COMPLETED``.
 
         Returns:
             tuple[set[TaskHandle], set[TaskHandle]]: A ``(done, pending)`` pair.
@@ -173,7 +184,7 @@ class Pipeline:
                 invalid, or ``return_when`` is invalid.
         """
         # Concrete implementation must validate return_when against WAIT_CONDITIONS.
-        scheduler, _ = self._require_control_context()
+        scheduler, record = self._require_control_context()
         normalized = validate_wait_request(
             handles,
             expected_type=TaskHandle,
@@ -185,6 +196,7 @@ class Pipeline:
 
         with scheduler._condition:
             while True:
+                self._raise_if_abort_requested_locked(record)
                 done, pending = split_done_pending(normalized)
                 if should_return(done=done, pending=pending, return_when=return_when):
                     return done, pending

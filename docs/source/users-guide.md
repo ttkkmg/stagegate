@@ -189,6 +189,41 @@ class ExamplePipeline(stagegate.Pipeline):
 The library does not try to infer structure that your code can already express
 directly.
 
+By default, `with stagegate.Scheduler(...)` is fail-fast on exceptional block
+exit. It starts best-effort shutdown cleanup and then lets the original
+exception propagate immediately instead of waiting for unrelated live work to
+drain. If you pass `exception_exit_policy="drain"`, an exception leaving the
+`with` block will first wait for the scheduler to drain and fully close, just
+like `close()`, and only then re-raise the original exception.
+
+If you want to observe task failures inside the pipeline and still prefer the
+outer scheduler context to wait for full shutdown before re-raising, a typical
+shape looks like this:
+
+```python
+class ExamplePipeline(stagegate.Pipeline):
+    def run(self):
+        handle = self.task(step_a, resources={"cpu": 1}).run()
+
+        try:
+            value = handle.result()
+        except Exception:
+            cleanup = self.task(cleanup_tmp, resources={"cpu": 1}).run()
+            cleanup.result()
+            raise
+
+        self.stage_forward()
+        return self.task(step_b, resources={"cpu": 1}, args=(value,)).run().result()
+
+
+with stagegate.Scheduler(
+    resources={"cpu": 2},
+    pipeline_parallelism=2,
+    exception_exit_policy="drain",
+) as scheduler:
+    scheduler.run_pipeline(ExamplePipeline()).result()
+```
+
 ## Failure Semantics Stay Simple
 
 At the scheduler level:

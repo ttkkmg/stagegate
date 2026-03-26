@@ -17,7 +17,11 @@ from ._records import (
     TaskRecord,
 )
 from ._states import PipelineState, SchedulerState, TaskState
-from .exceptions import TerminatedError, UnknownResourceError, UnschedulableTaskError
+from .exceptions import (
+    TerminatedError,
+    UnknownResourceError,
+    UnschedulableTaskError,
+)
 from .handles import PipelineHandle
 from .pipeline import Pipeline
 from .snapshots import (
@@ -43,6 +47,9 @@ if TYPE_CHECKING:
     from .pipeline import TaskBuilder
 
 
+EXCEPTION_EXIT_POLICIES = frozenset({"fail_fast", "drain"})
+
+
 class Scheduler:
     """Single-process scheduler for stage-aware local pipelines and tasks.
 
@@ -54,6 +61,11 @@ class Scheduler:
         pipeline_parallelism: Maximum number of pipeline coordinator threads.
         task_parallelism: Maximum number of concurrently admitted tasks. If
             ``None``, the effective worker count is ``1``.
+        exception_exit_policy: Exceptional context-manager exit policy.
+            ``"fail_fast"`` starts best-effort shutdown cleanup and lets the
+            original block exception propagate immediately.
+            ``"drain"`` waits for ``close()`` before the original block
+            exception propagates.
     """
 
     def __init__(
@@ -62,10 +74,14 @@ class Scheduler:
         resources: dict[str, int | float] | None = None,
         pipeline_parallelism: int = 1,
         task_parallelism: int | None = None,
+        exception_exit_policy: str = "fail_fast",
     ) -> None:
+        if exception_exit_policy not in EXCEPTION_EXIT_POLICIES:
+            raise ValueError("invalid exception_exit_policy")
         self._resources = {} if resources is None else dict(resources)
         self._pipeline_parallelism = pipeline_parallelism
         self._task_parallelism = task_parallelism
+        self._exception_exit_policy = exception_exit_policy
         self._runtime = SchedulerRuntime()
         self._runtime.resources_in_use = {label: 0 for label in self._resources}
         self._lock = threading.RLock()
@@ -89,13 +105,16 @@ class Scheduler:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Fully close the scheduler when leaving a context-manager block.
+        """Handle context-manager exit according to the exit policy.
 
         Args:
             exc_type: Exception type from the context manager protocol.
             exc: Exception instance from the context manager protocol.
             tb: Traceback object from the context manager protocol.
         """
+        if exc_type is not None and self._exception_exit_policy == "fail_fast":
+            self._start_fail_fast_shutdown()
+            return
         self.close()
 
     def shutdown_started(self) -> bool:
@@ -265,7 +284,9 @@ class Scheduler:
             handles: Pipeline handles created by this scheduler.
             timeout: Maximum wait time in seconds. ``None`` means unbounded
                 wait and ``0`` means immediate poll.
-            return_when: One of the public wait-condition constants.
+            return_when: One of ``stagegate.FIRST_COMPLETED``,
+                ``stagegate.FIRST_EXCEPTION``, or
+                ``stagegate.ALL_COMPLETED``.
 
         Returns:
             tuple[set[PipelineHandle], set[PipelineHandle]]: A ``(done, pending)``
@@ -378,6 +399,42 @@ class Scheduler:
                 changed = True
         if changed:
             self._condition.notify_all()
+
+    def _start_fail_fast_shutdown(self) -> None:
+        with self._condition:
+            self._start_fail_fast_shutdown_locked()
+
+    def _start_fail_fast_shutdown_locked(self) -> None:
+        if self._runtime.state is SchedulerState.CLOSED:
+            return
+        if self._runtime.state is SchedulerState.OPEN:
+            self._runtime.state = SchedulerState.SHUTTING_DOWN
+
+        self._cancel_pending_pipelines_locked()
+
+        for record in self._runtime.running_pipeline_records.values():
+            record.abort_requested = True
+
+        for task_record in list(self._runtime.task_records.values()):
+            if task_record.state is TaskState.QUEUED:
+                self._finalize_task_terminal_locked(
+                    task_record,
+                    state=TaskState.CANCELLED,
+                )
+                continue
+            if task_record.state is TaskState.READY:
+                self._finalize_task_terminal_locked(
+                    task_record,
+                    state=TaskState.CANCELLED,
+                    release_resources=True,
+                )
+                continue
+            if task_record.state is TaskState.RUNNING:
+                task_record.termination_requested = True
+                if task_record.active_context is not None:
+                    task_record.active_context.request_terminate()
+
+        self._condition.notify_all()
 
     def _notify_state_change_locked(self) -> None:
         self._condition.notify_all()
@@ -669,6 +726,7 @@ class Scheduler:
         self._runtime.running_pipeline_records.pop(record.pipeline_id, None)
         record.state = state
         record.coordinator_thread_ident = None
+        record.abort_requested = False
         if state is PipelineState.SUCCEEDED:
             record.result_value = result_value
             record.exception = None

@@ -88,6 +88,7 @@ class PipelineRecord:
     result_value: Any = None
     exception: BaseException | None = None
     coordinator_thread_ident: int | None = None
+    abort_requested: bool = False
     discarded: bool = False
     queued_task_count: int = 0
     admitted_task_count: int = 0
