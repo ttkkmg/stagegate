@@ -9,3 +9,4 @@ Welcome to Stagegate
    users-guide
    use-cases
    api/index
+   minigate/index

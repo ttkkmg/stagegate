@@ -1,6 +1,6 @@
 [project]
 name = "stagegate"
-version = "0.2.0"
+version = "0.3.0"
 description = "A small, explicit scheduler for forward-only pipelines with stage-aware task priority."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +32,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = []
+
+[project.scripts]
+minigate = "stagegate.tools.minigate.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ttkkmg/stagegate"

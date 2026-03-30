@@ -1,0 +1,16 @@
+pipelines 2
+tasks 2
+format args
+limit cpu, 2
+
+[alias]
+sample "{arg:stem}"
+text_file "{sample}.txt"
+
+[stage.1]
+use cpu, 1
+run "printf '%s\\n' '{arg}' > {text_file}"
+
+[stage.2]
+use cpu, 1
+run "wc -c {text_file} > {sample}.count.txt"

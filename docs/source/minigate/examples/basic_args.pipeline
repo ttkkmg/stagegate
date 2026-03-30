@@ -1,0 +1,16 @@
+pipelines 4
+tasks 2
+format args
+limit cpu, 4
+
+[alias]
+sample "{arg:stem}"
+tmp "{sample}.tmp"
+
+[stage.1]
+use cpu, 1
+run "preprocess {arg} > {tmp}"
+
+[stage.2]
+use cpu, 1
+run "summarize {tmp} > {sample}.summary.txt"

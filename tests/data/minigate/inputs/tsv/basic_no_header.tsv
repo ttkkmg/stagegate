@@ -1,0 +1,3 @@
+sampleA	reads/a_R1.fastq.gz	reads/a_R2.fastq.gz
+sampleB	reads/b_R1.fastq.gz	reads/b_R2.fastq.gz
+sampleC	reads/c_R1.fastq.gz	reads/c_R2.fastq.gz

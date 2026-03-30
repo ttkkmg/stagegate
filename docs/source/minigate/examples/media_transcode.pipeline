@@ -1,0 +1,23 @@
+pipelines 2
+tasks 4
+format csv
+header true
+limit cpu, 8
+
+[alias]
+VIDEO_STEM "{input_video:stem}"
+PROXY_MP4 "{VIDEO_STEM}.proxy.mp4"
+WAVE_FILE "{VIDEO_STEM}.wav"
+TRANSCRIPT_JSON "{VIDEO_STEM}.transcript.json"
+
+[stage.1]
+use cpu, 4
+run "ffmpeg -y -i {input_video} -vf scale=1280:-2 -c:v libx264 -preset medium -c:a aac {PROXY_MP4}",
+    "ffmpeg -y -i {input_video} -vn -ac 1 -ar 16000 {WAVE_FILE}"
+
+[stage.2]
+use cpu, 2
+run "python transcribe_audio.py --input {WAVE_FILE} --output {TRANSCRIPT_JSON}"
+
+[stage.3]
+run "rm {WAVE_FILE}"

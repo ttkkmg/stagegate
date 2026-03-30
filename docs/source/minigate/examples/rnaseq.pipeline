@@ -1,0 +1,22 @@
+pipelines 2
+tasks 4
+format args
+limit cpu, 8
+
+[alias]
+LIBNAME "{arg:removesuffix(_1.fastq.gz)}"
+READ1 "{LIBNAME}_1.fastq.gz"
+READ2 "{LIBNAME}_2.fastq.gz"
+TRIMMED1 "{LIBNAME}-trimmed_1.fastq.gz"
+TRIMMED2 "{LIBNAME}-trimmed_2.fastq.gz"
+
+[stage.1]
+use cpu, 2
+run "fastp --thread 2 -i {READ1} -o {TRIMMED1}", "fastp --thread 2 -i {READ2} -o {TRIMMED2}"
+
+[stage.2]
+use cpu, 8
+run "STAR --runThreadN 8 --readFilesCommand zcat --readFilesIn {TRIMMED1} {TRIMMED2} --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {LIBNAME}."
+
+[stage.3]
+run "rm {TRIMMED1} {TRIMMED2}"

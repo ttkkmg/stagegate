@@ -1,0 +1,2 @@
+cat    cat1.jpg     cat2.jpg      cat3.jpg
+dog  dog1.jpg   dog2.jpg

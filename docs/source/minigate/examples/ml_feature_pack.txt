@@ -1,0 +1,2 @@
+cat images/cat-001.jpg images/cat-002.jpg images/cat-003.jpg
+dog images/dog-010.jpg images/dog-011.jpg

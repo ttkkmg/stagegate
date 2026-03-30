@@ -1,0 +1,2 @@
+#notacomment image1.jpg image2.jpg
+cat cat1.jpg cat2.jpg

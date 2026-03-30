@@ -1,0 +1,22 @@
+pipelines 2
+tasks 4
+format varlists
+delimiter whitespace
+limit cpu, 8
+
+[list]
+image_files {#2}, ...
+
+[alias]
+feature_files "[image_files:stem].npz"
+
+[stage.1]
+use cpu, 1
+run_list "python extract_feature.py --label {#1} --input [image_files] --output [feature_files]"
+
+[stage.2]
+use cpu, 4
+run "python pack_features.py --label {#1} --inputs {[feature_files]} --output {#1}.dataset.tar"
+
+[stage.3]
+run "rm {[feature_files]}"

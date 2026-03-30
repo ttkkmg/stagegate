@@ -1,0 +1,4 @@
+sample_id	input_a	input_b	group
+t1	reads/t1_R1.fastq.gz	reads/t1_R2.fastq.gz	control
+t2	reads/t2_R1.fastq.gz	reads/t2_R2.fastq.gz	treated
+t3	reads/t3_R1.fastq.gz	reads/t3_R2.fastq.gz	treated

@@ -1,0 +1,3 @@
+cat cat1.jpg cat2.jpg cat3.jpg wildcat1.jpg wildcat2.jpg
+dog dog1.jpg dog2.jpg
+bird bird1.jpg bird2.jpg bird3.jpg bird4.jpg

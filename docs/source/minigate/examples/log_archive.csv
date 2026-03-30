@@ -1,0 +1,3 @@
+service,day,log_dir
+api,2026-03-28,/srv/log/api/2026-03-28
+worker,2026-03-28,/srv/log/worker/2026-03-28

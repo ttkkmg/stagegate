@@ -1,0 +1,20 @@
+pipelines 2
+tasks 4
+format varlists
+delimiter whitespace
+codepage "utf-8-sig"
+limit cpu, 4
+
+[list]
+target_images {#2}, ...
+
+[alias]
+dat_files "[target_images:stem].dat"
+
+[stage.1]
+use cpu, 1
+run_list "preprocess {#1} --in [target_images] --out [dat_files]"
+
+[stage.2]
+use cpu, 2
+run "makestat {#1} {[dat_files]} > {#1}.stat.txt"

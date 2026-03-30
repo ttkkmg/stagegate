@@ -1,0 +1,22 @@
+pipelines 4
+tasks 4
+format csv
+header true
+limit cpu, 4
+
+[alias]
+ARCHIVE_BASENAME "{service}_{day}"
+ARCHIVE_FILE "{ARCHIVE_BASENAME}.tar.zst"
+CHECKSUM_FILE "{ARCHIVE_FILE}.sha256"
+
+[stage.1]
+use cpu, 2
+run "tar --zstd -cf {ARCHIVE_FILE} {log_dir}"
+
+[stage.2]
+use cpu, 1
+run "sha256sum {ARCHIVE_FILE} > {CHECKSUM_FILE}"
+
+[stage.3]
+run "aws s3 cp {ARCHIVE_FILE} s3://company-logs/{service}/{day}/",
+    "aws s3 cp {CHECKSUM_FILE} s3://company-logs/{service}/{day}/"

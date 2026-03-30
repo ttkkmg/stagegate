@@ -1,0 +1,4 @@
+sample_id,input_a,input_b,group
+s1,reads/s1_R1.fastq.gz,reads/s1_R2.fastq.gz,control
+s2,reads/s2_R1.fastq.gz,treated
+s3,reads/s3_R1.fastq.gz,reads/s3_R2.fastq.gz,treated

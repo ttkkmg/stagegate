@@ -1,0 +1,22 @@
+pipelines 2
+tasks 4
+format csv
+header true
+limit cpu, 8
+
+[alias]
+IMAGE_STEM "{image_path:stem}"
+IMAGE_DIR "{image_path:parent}"
+TENSOR_FILE "{IMAGE_DIR}/{IMAGE_STEM}.tensor.pt"
+JSON_FILE "{sample_id}.prediction.json"
+
+[stage.1]
+use cpu, 2
+run "python preprocess_image.py --input {image_path} --output {TENSOR_FILE}"
+
+[stage.2]
+use cpu, 4
+run "python run_inference.py --model {model_name} --prompt-file {prompt_path} --input {TENSOR_FILE} --output {JSON_FILE}"
+
+[stage.3]
+run "rm {TENSOR_FILE}"
