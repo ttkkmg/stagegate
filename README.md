@@ -84,6 +84,14 @@ running pipelines. Cooperative terminate is opt-in.
 as Linux, macOS, and BSD. `stagegate` itself may still be usable on Windows if
 your tasks do not depend on that helper.
 
+## minigate
+
+`stagegate` also ships with `minigate`, a small shell-command-oriented front
+end for users who want forward-only staged execution without writing Python
+pipeline classes directly.
+
+If `stagegate` is installed, the `minigate` command is installed as well.
+
 ## Documentation
 
 User's guide, use cases and API reference can be found at [http://stagegate.readthedocs.io](http://stagegate.readthedocs.io).
